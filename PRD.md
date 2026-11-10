@@ -76,7 +76,7 @@ flowchart TD
 |---|---|---|---|
 | UR-1 | `life_safety` | Danger to a person | Fire, smoke, burning smell, sparks; gas or rotten-egg smell; carbon monoxide alarm; water reaching electrical fittings; anyone injured or trapped |
 | UR-2 | `urgent` | Emergency repair classes in s.33(1)(c) `[S: SRC-01]` and after-hours access loss | Major leak in pipes or roof, flooding; blocked or damaged water or sewer pipes or plumbing fixtures (sewage backup, no water, only toilet unusable); no heat or primary heating failure; damaged or defective lock giving access to a unit; electrical system failure; any lockout received after hours; tenant replies `URGENT` |
-| UR-3 | `uncertain` | The system cannot establish a tier | Model error or timeout; model confidence below threshold; no usable text (photo only, empty, unreadable, language outside the lexicon); rule and model disagree by more than one tier |
+| UR-3 | `uncertain` | The system cannot establish a tier | Model error or timeout; model confidence below threshold (0.80 `[P]`, proposed in B1 because no number was set; owner to confirm with the Phase 0 labelled set); no usable text (photo only, empty, unreadable, language outside the lexicon); rule and model disagree by more than one tier |
 | UR-4 | `routine` | Everything else | — |
 
 - UR-5: final tier = highest of rule tier, model tier and `uncertain`, in the order `life_safety` > `urgent` > `uncertain` > `routine`. The model can raise a tier; it can never lower a rule result.

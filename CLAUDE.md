@@ -1,6 +1,6 @@
 # CLAUDE.md — FixTriage
 
-Read [AGENTS.md](AGENTS.md) first; it is canonical. This file adds only what is specific to this product. Nothing is implemented; all commands are proposed.
+Read [AGENTS.md](AGENTS.md) first; it is canonical. This file adds only what is specific to this product. B1 (the deterministic safety spine with provider fakes) is implemented under `code/`; see AGENTS.md state line and section 12 for what exists. Everything else is proposed.
 
 ## The question this repository answers
 
@@ -50,7 +50,7 @@ Run in this order; each is defined in [execution-plan.md section 7](execution-pl
 8. IT-20 and IT-18 — a second unit's report still pages; a tenant who sent `STOP` still reaches a person.
 9. IT-16 — a killed worker alerts both operators within 5 minutes from outside the application.
 
-These are the first checks, not the go-live bar. The go-live bar is the single point in execution-plan.md section 1: every test passing (M-3.1 exit) plus the account's EP-9 gate. Until then, do not connect a real tenant-facing number.
+B1 status of this list (2026-11-11): items 1-9 were run at API/service level and passed, with the parts not run named in [verification section 7](verification-report-fixing.md#7-build-milestone-b1-2026-11-11) (IT-10 storage path, IT-14 backfill, browser halves of E2E-03/E2E-04). These are the first checks, not the go-live bar. The go-live bar is the single point in execution-plan.md section 1: every test passing (M-3.1 exit) plus the account's EP-9 gate. Until then, do not connect a real tenant-facing number.
 
 ## Before changing anything
 

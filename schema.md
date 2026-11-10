@@ -1,6 +1,6 @@
 # Schema — FixTriage
 
-PostgreSQL 16, Drizzle ORM (AD-02 in [TRD](TRD.md)). Proposed; no migration exists. "Account" = paying brokerage; "tenant" = renter. Rules cited (UR, EP, DU, FD) are in [PRD section 7](PRD.md#7-product-rules-canonical-other-files-cite-these-ids).
+PostgreSQL 16, Drizzle ORM (AD-02 in [TRD](TRD.md)). B1 (2026-11-11): the tables of sections 3.1-3.4 used by the safety spine exist as `code/packages/db/src/schema.ts` and migrations `0000_tables.sql` (generated) and `0001_rls_functions_views_grants.sql` (hand-written); `reviews`, `exports`, `privacy_requests` and `deletion_log` are not yet created. B1 changes are listed in section 3.5. "Account" = paying brokerage; "tenant" = renter. Rules cited (UR, EP, DU, FD) are in [PRD section 7](PRD.md#7-product-rules-canonical-other-files-cite-these-ids).
 
 ## 1. Entity-relationship diagram
 
@@ -69,7 +69,7 @@ erDiagram
 |---|---|---|
 | `inbound_messages` | `channel_id uuid not null → channels`; `provider text not null`; `provider_message_id text not null`; `from_address text not null`; `body text null`; `received_at timestamptz not null` (provider time); `stored_at timestamptz not null default now()`; `request_id uuid null → requests`; `tenant_contact_id uuid null → tenant_contacts`; `correlation_id uuid not null`; `raw_payload jsonb null` (cleared after 30 days); `safety_reply_id uuid null → outbound_messages` (null when one was sent to this sender in the previous 30 minutes or the sender is opted out). **Unique `(provider, provider_message_id)`** (DU-1) | P, C |
 | `attachments` | `inbound_message_id uuid not null → inbound_messages`; `idx smallint not null`; `storage_key text null`; `content_type text null`; `bytes int null`; `status text not null default 'pending' check in (pending, stored, unavailable, rejected)`; `description_ai text null`. Unique `(inbound_message_id, idx)` | C |
-| `requests` | `unit_id uuid null → units` (null = unknown sender, HI-6); `incident_id uuid null → incidents`; `incident_link_state text null check in (own, suggested, confirmed, rejected)` with `check ((incident_id is null) = (incident_link_state is null))`; `cannot_text boolean not null default false` (FD-7); `trade text null`; `tier text not null default 'uncertain' check in (life_safety, urgent, uncertain, routine)`; `tier_source text not null check in (rule, model, uncertainty, human)`; `after_hours boolean not null`; `state text not null default 'open' check in (open, awaiting_tenant, awaiting_approval, dispatched, closed)`; `opened_at timestamptz not null`; `closed_at timestamptz null`. A new request defaults to `uncertain`, never `routine` | C |
+| `requests` | `unit_id uuid null → units` (null = unknown sender, HI-6); `incident_id uuid null → incidents`; `incident_link_state text null check in (own, suggested, confirmed, rejected)` with `check ((incident_id is null) = (incident_link_state is null))`; `cannot_text boolean not null default false` (FD-7); `trade text null`; `tier text not null default 'uncertain' check in (life_safety, urgent, uncertain, routine)`; `tier_source text not null check in (pending, rule, model, uncertainty, human)` (`pending` = no decision yet, shown as `uncertain`, may move once to any tier; B1); `after_hours boolean not null`; `state text not null default 'open' check in (open, awaiting_tenant, awaiting_approval, dispatched, closed)`; `opened_at timestamptz not null`; `closed_at timestamptz null`. A new request defaults to `uncertain`, never `routine` | C |
 | `rule_sets` | `version int not null unique`; `definition jsonb not null`; `activated_at timestamptz null`; `checksum text not null`. Global, read-only to accounts | O |
 | `classifications` | `request_id uuid not null → requests`; `kind text not null check in (rule, model, human)`; `rule_set_version int null → rule_sets(version)`; `matched_rule text null`; `provider text null`; `model text null`; `prompt_version text null`; `proposed_tier text null`; `proposed_trade text null`; `proposed_unit_id uuid null`; `confidence numeric(4,3) null`; `missing_fields text[] null`; `status text not null check in (ok, failed, timeout, late)`; `actor_user_id uuid null → users`; `reason text null`; `check (kind <> 'human' or actor_user_id is not null)`. Append-only | C |
 | `reviews` | `request_id uuid not null → requests`; `reviewer_user_id uuid not null → users`; `verdict text not null check in (accepted, corrected)`; `corrected_trade text null`; `corrected_tier text null`; `corrected_unit_id uuid null`; `was_urgent_missed boolean not null default false`; `check (verdict = 'accepted' or corrected_trade is not null or corrected_tier is not null or corrected_unit_id is not null)`. Unique `(request_id)`; a changed review is a new audit event | O |
@@ -96,6 +96,27 @@ erDiagram
 | `deletion_log` | `object_type text not null`; `object_id uuid not null`; `deleted_at timestamptz not null`; `reason text not null`. Contains no personal data; replayed after a restore | O |
 | `probe_runs` | Not account-owned. `kind text not null check in (sms_round_trip, email_inbound)`; `sent_at timestamptz not null`; `received_at timestamptz null`; `ok boolean null`. Platform probe numbers only; no account channel is used (MH-16c) | O |
 
+### 3.5 Changes made in B1 (2026-11-11)
+
+Implementation needed the following; each is in the ORM schema and the migrations, and covered by the ORM-diff check (IT-14).
+
+| Table | Change | Why |
+|---|---|---|
+| `requests` | `tier_source` value `pending`; check `tier_source <> 'pending' or tier = 'uncertain'` | A request without a rule hit waits for the classifier without being `routine` (UR-3) and without the model "lowering" a decided tier; the UR-6 trigger allows only the first move out of `pending` |
+| `inbound_messages` | `media_count smallint`, `keyword text check in (stop, start, help)` | Photo-only detection (UR-3); the latest STOP/START from an address decides opt-out, also for unknown senders (FD-7) |
+| `outbound_messages` | `next_attempt_at timestamptz null`; index `(account_id, to_address, purpose, created_at)` | Retry spacing (TRD 6.3) and the 30-minute safety-reply window (MH-02) |
+| `classifications` | `inbound_message_id uuid null`; unique `(inbound_message_id, model) where kind = 'model'` | Idempotency key of the classify job `(inbound_message_id, model_version)` (TRD 6.3) |
+| `dispatches` | `emergency boolean not null` | FD-3 vs FD-4 decided once at approval |
+| `escalations` | `started_at`, `companions jsonb` (people paged with Level 1 on reopen: previous acknowledger, approver), `outcome_reminder_sent_at` | EP-11, FD-3, EP-7 |
+| `escalation_steps` | `target_role text check in (oncall, previous_acknowledger, approver, operator_primary, operator_backup)` in the unique key; result value `no_target`; Level-4 check allows a missing operator row | Several people are paged at the same (cycle, level, attempt) under EP-5 and EP-11; a level with nobody to page is recorded and skipped at once |
+| `jobs` (new, account-owned, RLS) | `kind`, `payload`, `dedupe_key` unique per account, `run_at`, `state`, `attempts`, `correlation_id` | Replaces pg-boss (TRD AD-02 note) |
+| `idempotency_keys` (new, account-owned, RLS) | `(account_id, key, route)` unique; stored status and body | `Idempotency-Key` on mutations (TRD 5.1) |
+| `pending_status_events` (new, global, no personal data) | provider, provider message ID, status, received time, attempts | A status for an ID not yet known is stored and retried (TRD 5.1, IT-09) |
+| `sessions` | Global (no `account_id`, no RLS); the application role has no grant; read only through `resolve_session` | Sessions also belong to operators, who have no account |
+| Resolver functions and poll views | Owned by the migration (database owner) role in B1; the separate `resolver` role is deferred to deployment | Local build machine; the column lists are checked by IT-10 |
+
+Open gap: a message to an address that resolves to no channel has no table to be "stored for the operator" (T-2.2.1 acceptance); B1 logs a code and returns 200. A global, operator-only table needs a decision because it would hold message text outside any account.
+
 ## 4. Permissions, account boundary, uniqueness
 
 | Object | `owner` | `manager` | `operator` | `web` service role | `worker` service role |
@@ -119,9 +140,10 @@ erDiagram
 | `resolve_capability(token_hash)` | `/a/:token`, `/v/:token` | `account_id`, `purpose`, `escalation_step_id`, `user_id`, `dispatch_id`, `expires_at`, `used_at` |
 | `resolve_outbound(provider_message_id)` | Delivery-status webhook | `account_id`, `outbound_message_id` |
 | view `due_escalations` | `escalation.tick` | `id`, `account_id`, `next_due_at` |
-| view `pending_outbox` | `outbox.send` | `id`, `account_id`, `created_at` |
+| view `pending_outbox` | `outbox.send` | `id`, `account_id`, `created_at`, `next_attempt_at` (B1: retry time) |
 | view `due_dispatches` | `dispatch.watch` | `id`, `account_id`, `confirm_due_at` |
 | view `sweep_accounts` | `digest.daily`, `retention.sweep` | `id` of accounts, `status` |
+| view `due_jobs` (B1) | job runner (`intake.process`, `classify`, `triage.timeout`) | `id`, `account_id`, `run_at` |
 
   None returns message text, names, phone numbers or addresses. Tables `operators`, `rule_sets`, `probe_runs` are global and hold no tenant data. IT-10 calls every function and view with crafted inputs and checks the column list.
 - Cross-account denial: a foreign-key lookup of another account's ID returns "not found"; composite foreign keys `(account_id, id)` on child tables prevent a row in one account from referencing a parent in another. References to `operators` (`escalation_steps.target_operator_id`, `escalations.operator_engaged_by`, `relayed_by_operator_id`, `sessions.operator_id`) are plain foreign keys because operators belong to no account.
@@ -137,8 +159,8 @@ erDiagram
 | `incidents (account_id, property_id, hazard_class, created_at desc) where state in ('open','acknowledged')` | Duplicate suggestion within 6 hours (DU-3) |
 | `requests (account_id, incident_id, incident_link_state)` | Report count and units of an incident; "suggested" list on S-05 |
 | `escalations (incident_id) where state = 'paging'` unique | One live escalation per incident; reopen check (EP-11) |
-| `escalations (next_due_at) where state = 'paging'` | View `due_escalations` for `escalation.tick` |
-| `escalation_steps (escalation_id, cycle, level, attempt)` unique | Idempotent step creation |
+| `escalations (next_due_at) where next_due_at is not null` | View `due_escalations` for `escalation.tick`; B1 keeps `next_due_at` on an acknowledged escalation for the EP-7 reminder and EP-11a reopen |
+| `escalation_steps (escalation_id, cycle, level, attempt, target_role)` unique | Idempotent step creation (B1 adds `target_role`) |
 | `outbound_messages (status, created_at) where status in ('pending','unknown')` | Outbox poll |
 | `outbound_messages (provider_message_id)` | Delivery-status webhook lookup |
 | `dispatches (confirm_due_at) where result is null` | `dispatch.watch` |
@@ -179,7 +201,7 @@ New indexes on existing tables are created with `create index concurrently` in t
 
 ## 9. Migrations
 
-- Ordering: one linear sequence of timestamp-prefixed SQL files generated from the Drizzle schema; CI fails if two branches add migrations with the same parent (R-10) or if the generated diff between ORM schema and a freshly migrated database is not empty (R-08).
+- Ordering: one linear sequence of SQL files generated from the Drizzle schema (B1: drizzle-kit's `0000_`, `0001_` index prefixes with the order in `meta/_journal.json`, checked by `checkJournalOrder`; hand-written objects in a `--custom` migration); CI fails if two branches add migrations with the same parent (R-10) or if the generated diff between ORM schema and a freshly migrated database is not empty (R-08).
 - Order of creation: `accounts` → `users`, `sessions` → places and people → `channels` → `operators` → `rule_sets` → `incidents` → `requests` → intake tables → `work_orders`, `dispatches` → `escalations`, steps → `outbound_messages` → operations tables → RLS policies → resolver functions and views → grants.
 - Expand, migrate, contract: additive change first; code that reads both; backfill; code that reads new; removal in a later release.
 - Backfills: separate resumable jobs, batches of 1,000 rows keyed by `id`, progress stored in a `backfill_progress` row, safe to re-run (R-09).

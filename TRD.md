@@ -66,8 +66,9 @@ flowchart LR
 | `packages/core` | Pure domain: rule engine, tier ordering, escalation state machine, duplicate matching, business-hours calendar, metrics | nothing from `apps`, no I/O |
 | `packages/db` | Drizzle schema, migrations, the only account-scoped query helper, RLS session setup | `packages/platform` |
 | `packages/platform` | Configuration, logger, correlation context, provider clients, storage keys, public URL builder | no framework imports |
+| `packages/services` | Transactional workflows shared by both deployables: intake (T1, T2), classify job, escalation tick and acknowledgement (T3, T4, T6), outbox, dispatch (T5), readiness. Added in B1 because `packages/db` may not import `packages/core` and apps may not import each other | `packages/core`, `packages/db`, `packages/platform`; no framework imports |
 
-Apps never import each other or package internals (R-04); configuration, logging and key building exist only in `packages/platform` (R-03, R-06, R-07).
+Apps never import each other or package internals (R-04); configuration, logging and key building exist only in `packages/platform` (R-03, R-06, R-07). B1 layout: all blocks live under `code/` (npm workspaces), because the repository root keeps only the planning files, `.gitignore` and `Makefile`; `code/tools/monitor-fake` stands in for the external monitor in tests and local runs.
 
 ### 5.1 API contracts
 
@@ -164,7 +165,8 @@ sequenceDiagram
 | Job | Trigger | Timeout / retries | Idempotency key | On exhaustion |
 |---|---|---|---|---|
 | `outbox.send` | Outbox row `pending` | 10 s; 3 tries over 60 s | `outbound_messages.dedupe_key` | Row `failed`; pages and safety replies raise an operator alert; a failed page counts as a failed channel (EP-4) |
-| `classify` | Inbound stored | 8 s per call, 2 tries, 20 s total | `(inbound_message_id, model_version)` | Tier `uncertain` (UR-3) |
+| `intake.process` (B1) | Inbound stored (T1 enqueues it with the safety reply) | 5 tries, backoff | `inbound_message_id` | Dead job; `/readyz` job age fails at 60 s |
+| `classify` | `intake.process` done | 8 s per call, 2 tries, 20 s total | `(inbound_message_id, model_version)` | Tier `uncertain` (UR-3) |
 | `escalation.tick` | Every 15 s | 10 s; single-flight per escalation by row lock | `(escalation_id, cycle, level, attempt)` unique | Missed tick is caught by the next; lateness alert at 60 s |
 | `dispatch.watch` | Every 30 s | — | `(dispatch_id, check)` | FD-4; for an emergency dispatch it creates a reopened escalation with trigger `dispatch_failed` (EP-11b), unique per dispatch |
 | `media.fetch` | MMS or email attachment | 30 s; 5 tries | `(inbound_message_id, index)` | Attachment `unavailable`, shown to staff; text still processed |
@@ -182,12 +184,12 @@ Rules for events and timeouts:
 
 | Aspect | Local | Staging | Production |
 |---|---|---|---|
-| Runtime | Docker Compose: PostgreSQL, S3-compatible store, provider fakes; `web` and `worker` run from source | AWS ca-central-1, ECS Fargate, one task each | Same, two `web` tasks, two `worker` tasks |
+| Runtime | Proposed: Docker Compose: PostgreSQL, S3-compatible store, provider fakes; `web` and `worker` run from source. B1 build machine (no Docker): local PostgreSQL 16 database `fixtriage_dev`, role `fixtriage_app`; storage and providers are in-process fakes | AWS ca-central-1, ECS Fargate, one task each | Same, two `web` tasks, two `worker` tasks |
 | Data | Synthetic fixtures | Synthetic only | Real; RDS PostgreSQL in two zones, encrypted |
 | Providers | Fakes with recorded payloads | Twilio test sub-account, test numbers, Postmark sandbox server, model API with test key | Live |
-| Public URL | `PUBLIC_BASE_URL=http://localhost:3000` | staging host name | production host name; all links built from this value (R-16) |
+| Public URL | `PUBLIC_BASE_URL=http://localhost:8109` (B1 web port) | staging host name | production host name; all links built from this value (R-16) |
 | Secrets | `.env.local`, never committed | AWS Secrets Manager | AWS Secrets Manager, rotated on staff change |
-| Start | **Proposed** `pnpm dev` (one command: dependencies, migrations, seed, web, worker, health wait) | Pipeline | Pipeline with manual approval |
+| Start | `npm run dev` from `code/` (exists since B1; replaces the proposed `pnpm dev`): role, migrations, rule-set seed, fake monitor (3109), web (8109), worker, health wait | Pipeline | Pipeline with manual approval |
 
 The founder's VPS `[C]` is not used for personal information: a single host has no managed backup or second zone `[P]`.
 
@@ -217,7 +219,7 @@ The account is not known at a few entry points. Each has one named database func
 | Sign-in | `resolve_login(email)` | `user_id`, `account_id`, password hash, TOTP state |
 | Capability link | `resolve_capability(token_hash)` | `account_id`, purpose, target IDs, `user_id`, expiry |
 | Delivery-status webhook | `resolve_outbound(provider_message_id)` | `account_id`, `outbound_message_id` |
-| Worker polls | views `due_escalations`, `pending_outbox`, `due_dispatches`, `sweep_accounts` | `id`, `account_id`, due time only |
+| Worker polls | views `due_escalations`, `pending_outbox`, `due_dispatches`, `sweep_accounts`, `due_jobs` (B1) | `id`, `account_id`, due time only (`pending_outbox` also `next_attempt_at`) |
 
 After resolution the handler or job enters `withAccount` for that account before reading anything else.
 
@@ -313,7 +315,7 @@ No per-account synthetic message is sent (cost in Decision.md 7.1). The monitor 
 | ID | Decision | Alternative rejected | Revisit when |
 |---|---|---|---|
 | AD-01 | TypeScript monorepo, Next.js `web` and Node `worker` | Python FastAPI backend `[C option]`: second language for one developer | Team grows |
-| AD-02 | PostgreSQL 16 is the only durable store; pg-boss queue inside it | Redis queue: second stateful service, no transactional enqueue | Queue age target missed |
+| AD-02 | PostgreSQL 16 is the only durable store; pg-boss queue inside it. B1: a plain `jobs` table polled through view `due_jobs` replaces pg-boss (same transactional enqueue, account-scoped with RLS, no extra schema owned by a library); Redis is not used | Redis queue: second stateful service, no transactional enqueue | Queue age target missed |
 | AD-03 | Escalation steps as rows polled every 15 s | In-memory or provider-side timers: lost on restart | — |
 | AD-04 | Rules before model, highest tier wins, human-only downgrade | Model-only urgency | Never without new evidence |
 | AD-05 | Safety reply enqueued in the ingest transaction | Reply after classification | — |

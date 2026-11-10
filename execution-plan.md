@@ -132,13 +132,15 @@ Entry (the single go-live point): M-3.1 exit; signed agreement; EP-9 go-live gat
 
 ## 7. Tests (all `Not run`)
 
+B1 (2026-11-11): the tests that have run, with commands and results, are recorded in [verification-report-fixing.md section 7](verification-report-fixing.md#7-build-milestone-b1-2026-11-11); every other test here is still `Not run`.
+
 ### 7.1 Unit
 
 | ID | Fixture | Action | Expected |
 |---|---|---|---|
 | UT-01 | 200+ emergency messages incl. "no heet", "gas smel", "water thru ceiling", photo-only, non-English | Rule engine | Tier per label; none `routine` |
 | UT-02 | Rule `urgent`, model `routine` conf 0.99; rule none, model `life_safety` | Final tier | `urgent`; `life_safety` |
-| UT-03 | Hours Mon-Fri 09:00-17:00, holiday 2027-01-01, clock change 2027-03-14 | `isAfterHours` at boundaries | 16:59:59 false; 17:00:00 true; holiday true; correct across the clock change |
+| UT-03 | Hours Mon-Fri 09:00-17:00, holiday 2027-01-01, a clock change (the tz database shipped with Node 24.22.2, tzdata 2026e, has America/Vancouver at UTC-7 all year from 2026-03-08, so 2027-03-14 is not a change there; B1 tests Vancouver's 2026-03-08 change and America/Toronto's 2027-03-14 change) | `isAfterHours` at boundaries | 16:59:59 false; 17:00:00 true; holiday true; correct across the clock change |
 | UT-04 | Timeout 300 s | Schedule from t0 | Steps at 0, 2, 5, 7, 10, 12 min; primary operator at 15, backup at 20, both every 5 min until one engages; Levels 1-3 again from 30 min whether or not an operator engaged |
 | UT-05 | Schedule with Saturday 00:00-08:00 Level 1 missing; schedule with one person on all levels | Validate | Gap named; "two different people" error |
 | UT-06 | Reports at 0, 29, 31 min same sender; other sender same property 5 h 59 and 6 h 01 | Match | Append, append, new; suggest, no suggestion |
@@ -190,6 +192,8 @@ Entry (the single go-live point): M-3.1 exit; signed agreement; EP-9 go-live gat
 | E2E-10 | `manager`; other account's URL | Edit S-09; open URL | Permission denied; not found |
 
 ## 8. Proposed scripts
+
+B1: `pnpm` is not installed on the build machine; scripts are npm scripts in `code/package.json`. `pnpm dev` exists as `npm run dev` and `pnpm check:migrations` as `npm run check:migrations`; the others below are still proposed (AGENTS.md section 12).
 
 | Script | Purpose | Inputs | Outputs | On failure |
 |---|---|---|---|---|

@@ -2,7 +2,7 @@
 
 Canonical instructions for any agent or person working in this repository. `CLAUDE.md` adds product-specific guidance and defers to this file.
 
-**State of the repository: planning documents only. No application code, scripts, migrations or infrastructure exist. Every command in any file is proposed and has never been run.**
+**State of the repository (2026-11-11): build milestone B1 implemented on branch `feat/b1-foundation`, authorised by the owner on 2026-11-11 before the Phase 0 sales gate (G-build) passed. Code lives under `code/` (npm workspaces). Implemented: the deterministic safety spine (intake, safety reply, rule set v1, tier floor, escalation chain, outbox, duplicate rules, failed-dispatch reopen, STOP path, readiness) with provider fakes only. Not implemented: real provider clients, sign-in, UI screens, AI drafting, digest, export, retention, deployment. Test results: [verification file section 7](verification-report-fixing.md#7-build-milestone-b1-2026-11-11). Commands not listed in section 12 remain proposed and have never been run.**
 
 ## 1. Reading order
 
@@ -49,7 +49,7 @@ If two files disagree, the file in the middle column wins and the other is fixed
 
 ## 5. Architecture conventions (proposed)
 
-- TypeScript monorepo: `apps/web`, `apps/worker`, `packages/core`, `packages/db`, `packages/platform`. Apps import only package entry points; apps never import each other.
+- TypeScript monorepo under `code/` (the repository root keeps only the planning files, `.gitignore` and `Makefile`): `code/apps/web`, `code/apps/worker`, `code/packages/core`, `code/packages/db`, `code/packages/platform`, `code/packages/services` (transactional workflows shared by web and worker; added in B1, TRD 5), `code/tools/monitor-fake`. Apps import only package entry points; apps never import each other. The import-boundary lint is `code/eslint.config.mjs`, tested by `code/test/boundary-lint.test.ts`.
 - `packages/core` is pure: no network, database, clock or environment access except through parameters.
 - All outbound messages go through the outbox. All timers are database rows. All links come from the public URL builder. Failure detection lives in the external monitor, never in the process being watched (TRD 8.9).
 - Deterministic code decides tiers' floor, business hours, routing, timers, permissions and metrics. A model proposes; it never decides alone and never lowers a tier.
@@ -57,6 +57,28 @@ If two files disagree, the file in the middle column wins and the other is fixed
 ## 6. Reuse
 
 Before writing a helper, search `packages/core` and `packages/platform`. There is exactly one of each: business-hours calendar, tier ordering, configuration loader, logger, correlation helper, storage-key builder, URL builder, account-scoped database helper. A second one is a defect (R-03, R-06).
+
+Utilities index (B1, paths under `code/`):
+
+| Utility | Location | Entry |
+|---|---|---|
+| Business-hours calendar | `packages/core/src/business-hours.ts` | `isAfterHours`, `addBusinessMinutes` |
+| Tier ordering | `packages/core/src/tiers.ts` | `maxTier`, `tierRank`, `isLower` |
+| Final tier (UR-3, UR-5) | `packages/core/src/final-tier.ts` | `finalTier`, `raiseOnly` |
+| Rule set v1 and engine | `packages/core/src/rules/` | `evaluateRules`, `ruleFloor`, `RULES_V1` |
+| Escalation policy and step planner | `packages/core/src/escalation-policy.ts` | `EP`, `planSteps` |
+| On-call coverage check (EP-1, EP-9) | `packages/core/src/coverage.ts` | `checkCoverage` |
+| Duplicate rules (DU-2..DU-4) | `packages/core/src/duplicates.ts` | `appendsToOpenRequest`, `suggestsDuplicate`, `du4Decision` |
+| Delivery status rank | `packages/core/src/delivery-status.ts` | `applyStatus` |
+| Fixed templates | `packages/core/src/templates.ts` | `renderSafetyReply` and others |
+| Configuration loader | `packages/platform/src/config.ts` | `loadConfig`, `parseConfig` |
+| Logger and scrubber | `packages/platform/src/logger.ts`, `scrub.ts` | `createLogger`, `scrub` |
+| Correlation helper | `packages/platform/src/correlation.ts` | `withCorrelation`, `currentCorrelationId` |
+| Storage-key builder, URL builder, capability tokens | `packages/platform/src/keys-and-urls.ts` | `storageKey`, `publicUrl`, `newCapabilityToken` |
+| Provider interfaces and fakes (SMS/voice/email, model, storage, monitor) | `packages/platform/src/providers/` | `MessagingProvider`, `Classifier`, `ObjectStorage`, `MonitorClient` |
+| Account-scoped database helper, resolvers, poll views | `packages/db/src/client.ts` | `withAccount`, `resolvers`, `poll`, `oldestDue` |
+| Migration runner, ORM-diff check | `packages/db/src/migrate.ts`, `orm-diff.ts` (entry `@fixtriage/db/migrate`) | `migrate`, `ormDiff` |
+| Clock | `packages/platform/src/clock.ts` | `systemClock`, `FakeClock` |
 
 ## 7. Account safety
 
@@ -87,3 +109,14 @@ Additive first; generated from the ORM schema; one linear sequence; concurrent i
 - Application checks stay `Not run` in the verification file until executed; then record date, commit and result.
 - A planned control is never reported as compliance with ASVS or WCAG. Requirements recorded as "not met" stay listed until tested.
 - Report anything skipped, blocked or assumed. If a source could not be opened, say so.
+
+## 12. Commands that exist (B1)
+
+Run from `code/` (or `make <target>` from the root). `pnpm`, `uv` and Docker are not installed on the build machine, so the proposed `pnpm` commands run as `npm` scripts and the Compose setup of TRD 7 stays proposed.
+
+| Proposed command | Exists as | Status |
+|---|---|---|
+| `pnpm dev` | `npm run dev` (`make dev`): role, migrations and seed on `fixtriage_dev`, fake monitor on 3109, web on 8109, worker; waits for `/healthz` and `/readyz` | Exists; run 2026-11-11, healthy |
+| `pnpm check:migrations` | `npm run check:migrations` | Exists; run 2026-11-11, pass |
+| — | `npm run lint`, `npm run typecheck`, `npm test`, `npm run db:reset-test`, `npm run db:migrate`, `npm run db:setup`, `npm run verify` | Exist |
+| `pnpm seed:synthetic`, `eval:classifier`, `replay:inbound`, `drill:restore`, `probe:run`, `load:burst` | — | Still proposed, not written |
