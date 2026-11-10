@@ -1,0 +1,13 @@
+{
+  "name": "@fixtriage/worker",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "scripts": { "start": "tsx src/main.ts" },
+  "dependencies": {
+    "@fixtriage/core": "0.0.0",
+    "@fixtriage/db": "0.0.0",
+    "@fixtriage/platform": "0.0.0",
+    "@fixtriage/services": "0.0.0"
+  }
+}

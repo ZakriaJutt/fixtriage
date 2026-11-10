@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+.venv/
+# environment and secrets
+.env
+.env.*
+!.env.example
+# build output and caches
+.next/
+dist/
+build/
+out/
+coverage/
+*.tsbuildinfo
+.eslintcache
+.vitest-cache/
+.turbo/
+# local data and logs
+*.log
+data/
+tmp/
+.DS_Store
