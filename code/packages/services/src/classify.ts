@@ -16,7 +16,7 @@ async function callModel(deps: Deps, text: string | null, hasMedia: boolean): Pr
     const remaining = CLASSIFY_TOTAL_MS - (Date.now() - started);
     if (remaining <= 0) break;
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), Math.min(CLASSIFY_CALL_TIMEOUT_MS, remaining));
+    const timer = setTimeout(() => ctl.abort(), Math.min(deps.classifyTimeoutMs ?? CLASSIFY_CALL_TIMEOUT_MS, remaining));
     try {
       const a = await deps.classifier.classify({ text, hasMedia }, ctl.signal);
       if (!isTier(a.tier) || typeof a.confidence !== 'number') return { outcome: { status: 'malformed' }, answer: null, status: 'failed' };

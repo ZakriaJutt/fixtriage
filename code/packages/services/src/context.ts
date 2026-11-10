@@ -11,6 +11,8 @@ export interface Deps {
   storage: ObjectStorage;
   publicBaseUrl: string;
   pagingFromNumber: string;
+  /** Per-call model timeout; TRD 6.3 says 8 s. Tests shorten it. */
+  classifyTimeoutMs?: number;
   log?: Logger;
 }
 

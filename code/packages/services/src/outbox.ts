@@ -83,7 +83,8 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 /** One pass of `outbox.send` over due rows of every account (poll view `pending_outbox`). */
 export async function processOutbox(deps: Deps, limit = 100): Promise<number> {
   const now = deps.clock.now();
-  const due = await poll(deps.database, 'pending_outbox', now, limit);
+  // Rows enqueued together are spaced 1 ms apart to keep their order (safety reply before notice, voice before SMS).
+  const due = await poll(deps.database, 'pending_outbox', new Date(now.getTime() + 10), limit);
   let n = 0;
   for (const d of due) {
     if (await sendOne(deps, d.account_id, d.id)) n++;
