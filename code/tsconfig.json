@@ -16,6 +16,6 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["apps/*/src/**/*.ts", "apps/web/app/**/*.ts", "apps/web/app/**/*.tsx", "packages/*/src/**/*.ts", "packages/*/scripts/**/*.ts", "packages/*/test/**/*.ts", "packages/db/drizzle.config.ts", "tools/**/*.ts", "test/**/*.ts", "vitest.config.ts"],
+  "include": ["apps/*/src/**/*.ts", "apps/*/test/**/*.ts", "apps/web/app/**/*.ts", "apps/web/instrumentation.ts", "packages/*/src/**/*.ts", "packages/*/scripts/**/*.ts", "packages/*/test/**/*.ts", "packages/db/drizzle.config.ts", "tools/**/*.ts", "test/**/*.ts", "vitest.config.ts"],
   "exclude": ["node_modules", "**/.next/**"]
 }

@@ -1,5 +1,6 @@
 // Applies migrations and the rule-set seed to fixtriage_dev (or fixtriage_test with --test).
-import { migrate, ownerUrl, target } from '@fixtriage/db';
+import { ownerUrl, target } from '@fixtriage/db';
+import { migrate } from '@fixtriage/db/migrate';
 import { seedRuleSets } from '@fixtriage/services';
 
 const which = target();

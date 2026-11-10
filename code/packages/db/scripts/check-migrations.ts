@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process';
 import { readdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { migrationFiles, ormDiff } from '../src/index';
+import { migrationFiles, ormDiff } from '../src/migrate-entry';
 import { ownerUrl, target } from '../src/local-env';
 
 const dir = fileURLToPath(new URL('../migrations/', import.meta.url));

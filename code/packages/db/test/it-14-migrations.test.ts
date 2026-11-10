@@ -2,7 +2,8 @@
 // refused; conflicting migration parents fail the order check. The backfill case is not run (no backfill exists in B1).
 import { describe, expect, it } from 'vitest';
 import pg from 'pg';
-import { checkJournalOrder, migrate, ormDiff, ownerUrl, APP_ROLE } from '@fixtriage/db';
+import { ownerUrl, APP_ROLE } from '@fixtriage/db';
+import { checkJournalOrder, migrate, ormDiff } from '@fixtriage/db/migrate';
 import { seedRuleSets } from '@fixtriage/services';
 
 const url = ownerUrl('test');

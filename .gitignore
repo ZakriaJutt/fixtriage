@@ -20,3 +20,4 @@ coverage/
 data/
 tmp/
 .DS_Store
+next-env.d.ts

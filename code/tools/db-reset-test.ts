@@ -1,6 +1,7 @@
 // Drops every object in fixtriage_test's public schema and re-migrates from empty (DEV-GUIDE quality loop).
 import pg from 'pg';
-import { APP_ROLE, migrate, ownerUrl } from '@fixtriage/db';
+import { APP_ROLE, ownerUrl } from '@fixtriage/db';
+import { migrate } from '@fixtriage/db/migrate';
 import { seedRuleSets } from '@fixtriage/services';
 
 const url = ownerUrl('test');
