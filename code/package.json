@@ -2,16 +2,21 @@
   "name": "fixtriage",
   "private": true,
   "type": "module",
-  "workspaces": ["apps/*", "packages/*", "tools/*"],
-  "engines": { "node": ">=24" },
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "tools/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "tsx tools/dev.ts",
     "db:setup": "tsx packages/db/scripts/setup-role.ts",
-    "db:migrate": "tsx packages/db/scripts/migrate.ts",
-    "db:reset-test": "tsx packages/db/scripts/reset-test.ts",
+    "db:migrate": "tsx tools/db-migrate.ts",
+    "db:reset-test": "tsx tools/db-reset-test.ts",
     "db:generate": "drizzle-kit generate --config packages/db/drizzle.config.ts",
     "check:migrations": "tsx packages/db/scripts/check-migrations.ts",
-    "seed:synthetic": "tsx packages/db/scripts/seed-synthetic.ts",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
@@ -27,5 +32,9 @@
     "typescript": "5.9.3",
     "typescript-eslint": "8.72.1",
     "vitest": "3.2.7"
+  },
+  "dependencies": {
+    "drizzle-orm": "0.45.4",
+    "pg": "8.23.1"
   }
 }
