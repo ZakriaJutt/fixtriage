@@ -387,6 +387,8 @@ export async function paging(tx: Tx, incidentId: string): Promise<EscalationRow 
 /** EP-7: the acknowledger (or another person of the account) records the outcome; outcome timers stop. */
 export async function recordOutcome(tx: Tx, deps: Deps, accountId: string, input: { incidentId: string; userId: string; outcome: 'vendor_dispatched' | 'handled_by_phone' | 'attending'; expectedVersion?: number }): Promise<{ version: number }> {
   const now = deps.clock.now();
+  const [exists] = await tx.select({ id: tables.incidents.id }).from(tables.incidents).where(eq(tables.incidents.id, input.incidentId));
+  if (!exists) throw new NotFoundError('incident');
   const r = await tx
     .update(tables.incidents)
     .set({ outcome: input.outcome, outcomeBy: input.userId, outcomeAt: now, state: 'outcome_recorded', updatedAt: now, version: sql`${tables.incidents.version} + 1` })

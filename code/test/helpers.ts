@@ -177,7 +177,7 @@ export async function staffCall(h: Harness, method: string, path: string, sessio
   const headers: Record<string, string> = { 'content-type': 'application/json', ...extra };
   if (session) {
     headers.cookie = session.cookie;
-    if (method !== 'GET' && !('omitCsrf' in extra)) headers[CSRF_HEADER] = session.csrf;
+    if (method !== 'GET' && !('omitCsrf' in extra) && !(CSRF_HEADER in extra)) headers[CSRF_HEADER] = session.csrf;
   }
   delete headers.omitCsrf;
   const req = new Request(`http://internal${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });

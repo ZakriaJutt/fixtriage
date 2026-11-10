@@ -243,7 +243,7 @@ export async function ensureIncident(tx: Tx, deps: Deps, accountId: string, requ
     const cand = await tx.execute(sql`
       select id, created_at, state, tier, building_wide from incidents
       where property_id = ${propertyId} and hazard_class = ${hazardClass} and state in ('open', 'acknowledged')
-      order by created_at desc limit 1`);
+      order by building_wide desc, created_at desc limit 1`); // DU-4(d): a building-wide flag claims later same-hazard reports
     const c = cand.rows[0] as { id: string; created_at: Date; state: string; tier: Tier; building_wide: boolean } | undefined;
     if (c && suggestsDuplicate(new Date(c.created_at).getTime(), receivedAt.getTime())) {
       const units = await tx.select({ unitId: tables.requests.unitId }).from(tables.requests).where(and(eq(tables.requests.incidentId, c.id), inArray(tables.requests.incidentLinkState, ['own', 'suggested', 'confirmed'])));

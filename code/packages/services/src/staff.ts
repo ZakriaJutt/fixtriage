@@ -4,7 +4,7 @@ import { sha256 } from '@fixtriage/platform';
 import { timingSafeEqual } from 'node:crypto';
 import { tierRank, type Tier } from '@fixtriage/core';
 import { audit, ConflictError, ForbiddenError, NotFoundError, withAccount, type Deps } from './context';
-import { acknowledge, incidentView, operatorEngaged, paging, type AckResult } from './escalation';
+import { acknowledge, incidentView, operatorEngaged, paging, startEscalation, type AckResult } from './escalation';
 
 export interface StaffPrincipal {
   userId: string;
@@ -129,4 +129,29 @@ export async function operatorRelayAck(tx: Tx, deps: Deps, accountId: string, in
   const [u] = await tx.select({ id: tables.users.id }).from(tables.users).where(eq(tables.users.id, input.accountUserId));
   if (!u) throw new NotFoundError('user');
   return acknowledge(tx, deps, accountId, { escalationId: input.escalationId, userId: u.id, via: 'operator_relay', relayedByOperatorId: input.operatorId });
+}
+
+/** DU-5 / HI-13 "Separate problem": the suggested request becomes its own incident with its own escalation. Reports are never deleted. */
+export async function rejectSuggestion(tx: Tx, deps: Deps, accountId: string, input: { requestId: string; userId: string }): Promise<{ incidentId: string }> {
+  const now = deps.clock.now();
+  const [r] = await tx.select().from(tables.requests).where(eq(tables.requests.id, input.requestId));
+  if (!r) throw new NotFoundError('request');
+  if (r.incidentLinkState !== 'suggested' && r.incidentLinkState !== 'confirmed') throw new ConflictError('not_linked');
+  const [old] = await tx.select().from(tables.incidents).where(eq(tables.incidents.id, r.incidentId!));
+  const [inc] = await tx
+    .insert(tables.incidents)
+    .values({ accountId, propertyId: old?.propertyId ?? null, hazardClass: old?.hazardClass ?? 'unknown', tier: r.tier, createdAt: now, updatedAt: now })
+    .returning({ id: tables.incidents.id });
+  await tx.update(tables.requests).set({ incidentId: inc!.id, incidentLinkState: 'own', updatedAt: now, version: sql`${tables.requests.version} + 1` }).where(eq(tables.requests.id, r.id));
+  await audit(tx, { accountId, actorKind: 'user', actorId: input.userId, action: 'incident.suggestion_rejected', objectType: 'request', objectId: r.id, before: { incident_id: r.incidentId }, after: { incident_id: inc!.id } }, now);
+  await startEscalation(tx, deps, accountId, inc!.id, 'new_incident', { requestId: r.id });
+  return { incidentId: inc!.id };
+}
+
+/** DU-4(d): only a human marks an incident building-wide. */
+export async function markBuildingWide(tx: Tx, deps: Deps, accountId: string, input: { incidentId: string; userId: string }): Promise<void> {
+  const now = deps.clock.now();
+  const r = await tx.update(tables.incidents).set({ buildingWide: true, buildingWideSetBy: input.userId, updatedAt: now, version: sql`${tables.incidents.version} + 1` }).where(eq(tables.incidents.id, input.incidentId)).returning({ id: tables.incidents.id });
+  if (!r[0]) throw new NotFoundError('incident');
+  await audit(tx, { accountId, actorKind: 'user', actorId: input.userId, action: 'incident.building_wide', objectType: 'incident', objectId: input.incidentId }, now);
 }

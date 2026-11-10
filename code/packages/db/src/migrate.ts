@@ -14,11 +14,16 @@ const DIR = fileURLToPath(new URL('../migrations/', import.meta.url));
 
 export function migrationFiles(): string[] {
   const journal = JSON.parse(readFileSync(`${DIR}meta/_journal.json`, 'utf8')) as { entries: Array<{ idx: number; tag: string }> };
-  const tags = journal.entries.sort((a, b) => a.idx - b.idx).map((e) => e.tag);
-  tags.forEach((t, i) => {
-    if (!t.startsWith(String(i).padStart(4, '0') + '_')) throw new Error(`migration order broken at ${t}`);
+  return checkJournalOrder(journal.entries);
+}
+
+/** One linear sequence (R-10): indexes 0..n-1, each used once, tags prefixed with their index. Two branches that both add migration n fail here. */
+export function checkJournalOrder(entries: Array<{ idx: number; tag: string }>): string[] {
+  const sorted = [...entries].sort((a, b) => a.idx - b.idx);
+  sorted.forEach((e, i) => {
+    if (e.idx !== i || !e.tag.startsWith(String(i).padStart(4, '0') + '_')) throw new Error(`migration order broken at ${e.tag}`);
   });
-  return tags;
+  return sorted.map((e) => e.tag);
 }
 
 export async function migrate(ownerUrl: string): Promise<MigrateResult> {
