@@ -115,7 +115,17 @@ Implementation needed the following; each is in the ORM schema and the migration
 | `sessions` | Global (no `account_id`, no RLS); the application role has no grant; read only through `resolve_session` | Sessions also belong to operators, who have no account |
 | Resolver functions and poll views | Owned by the migration (database owner) role in B1; the separate `resolver` role is deferred to deployment | Local build machine; the column lists are checked by IT-10 |
 
-Open gap: a message to an address that resolves to no channel has no table to be "stored for the operator" (T-2.2.1 acceptance); B1 logs a code and returns 200. A global, operator-only table needs a decision because it would hold message text outside any account.
+Fix round 1 (2026-11-11, review fixtriage-b1-round1.md):
+
+| Object | Change | Finding |
+|---|---|---|
+| `unrouted_inbound` (new, global) | provider, kind, provider message ID (unique per provider), destination address, received time, `cleared_at`, `cleared_by_operator_id`. **Metadata only**: no sender and no text, so no tenant data sits outside an account; the operator retrieves the message from the provider by its ID. An uncleared row fails `/readyz`, so the external monitor alerts both operators. Postmark is answered 503 (it retries); Twilio 200 (it does not retry inbound). Whether to keep message text for the operator stays an owner decision | B1-004 (resolves the earlier open gap) |
+| `channels` | Unique index on `lower(address)` (`channels_address_lower_uq`) replaces `channels_address_uq`; `resolve_channel` compares `lower(btrim(...))`. Built inside the migration transaction, not concurrently: the table is empty before go-live | B1-004 |
+| view `due_jobs` | Adds `kind` so model jobs run in their own runner | B1-002 |
+| view `due_undecided` (new) | `id`, `account_id`, `due_at`: requests with no incident that are `pending`, `uncertain` or cannot-text and have no human classification; due 30 s after receipt if pending, at once after hours, at 15 min in business hours | B1-001 |
+| view `job_health` (new) | `dead_jobs` count only | B1-001 |
+| trigger `accounts_validate` | Rejects an unknown time zone or malformed business hours | B1-009 |
+| `rule_sets` | Version 2 seeded (v1 kept, unchanged checksum); new decisions store `rule_set_version = 2` | B1-003 |
 
 ## 4. Permissions, account boundary, uniqueness
 
@@ -143,7 +153,9 @@ Open gap: a message to an address that resolves to no channel has no table to be
 | view `pending_outbox` | `outbox.send` | `id`, `account_id`, `created_at`, `next_attempt_at` (B1: retry time) |
 | view `due_dispatches` | `dispatch.watch` | `id`, `account_id`, `confirm_due_at` |
 | view `sweep_accounts` | `digest.daily`, `retention.sweep` | `id` of accounts, `status` |
-| view `due_jobs` (B1) | job runner (`intake.process`, `classify`, `triage.timeout`) | `id`, `account_id`, `run_at` |
+| view `due_jobs` (B1) | job runners (safety loop: `intake.process`, `triage.timeout`; model loop: `classify`) | `id`, `account_id`, `run_at`, `kind` |
+| view `due_undecided` (B1-001) | decision sweep in the safety loop | `id`, `account_id`, `due_at` |
+| view `job_health` (B1-001) | `/readyz` | `dead_jobs` (a count) |
 
   None returns message text, names, phone numbers or addresses. Tables `operators`, `rule_sets`, `probe_runs` are global and hold no tenant data. IT-10 calls every function and view with crafted inputs and checks the column list.
 - Cross-account denial: a foreign-key lookup of another account's ID returns "not found"; composite foreign keys `(account_id, id)` on child tables prevent a row in one account from referencing a parent in another. References to `operators` (`escalation_steps.target_operator_id`, `escalations.operator_engaged_by`, `relayed_by_operator_id`, `sessions.operator_id`) are plain foreign keys because operators belong to no account.
@@ -154,6 +166,8 @@ Open gap: a message to an address that resolves to no channel has no table to be
 | Index | Query served |
 |---|---|
 | `inbound_messages (provider, provider_message_id)` unique | Webhook de-duplication (DU-1) |
+| `channels (lower(address))` unique (B1-004) | `resolve_channel`, case-insensitive |
+| `unrouted_inbound (provider, provider_message_id)` unique (B1-004) | One record per unrouted message across provider retries |
 | `inbound_messages (account_id, from_address, received_at desc)` | Same-sender threading within 30 minutes (DU-2) |
 | `requests (account_id, state, tier, opened_at desc)` | S-03 inbox sections |
 | `incidents (account_id, property_id, hazard_class, created_at desc) where state in ('open','acknowledged')` | Duplicate suggestion within 6 hours (DU-3) |

@@ -192,6 +192,8 @@ Blocked or out of scope for B1, with reason: T-1.1.4 and every real Twilio/Postm
 
 ### 7.2 Commands and results (run from `code/` on commit `3b68879`, clean test database)
 
+Superseded by the fix-round-1 run in 7.5 (commit `699c429`, 139 passed); the table below is the original B1 run.
+
 | Command | Result |
 |---|---|
 | `npm run lint` (ESLint 9 with typescript-eslint, boundary rules) | Pass, 0 problems |
@@ -236,7 +238,7 @@ Not run: UT-08, IT-05, IT-15, IT-17, E2E-01, E2E-02, E2E-05..E2E-10, classifier 
 
 | ID | Finding | Change |
 |---|---|---|
-| B1-F1 | UT-03's "clock change 2027-03-14" does not exist for America/Vancouver in the tz database shipped with Node 24.22.2 (tzdata 2026e: UTC-7 all year from 2026-03-08). The legal basis was not checked. Business hours follow whatever the zone database says | execution-plan.md UT-03 row; test covers Vancouver 2026-03-08 and Toronto 2027-03-14 |
+| B1-F1 | UT-03's "clock change 2027-03-14" does not exist for America/Vancouver in the tz database shipped with Node 24.22.2 (tzdata 2026e: UTC-7 all year from 2026-03-08). Legal basis (fix round 1, B1-008): BC news release 2026AG0013-000209 of 2 March 2026, Decision.md SRC-23, opened by the reviewer, not re-opened by the developer. East Kootenay and Golden still change clocks (America/Edmonton). A startup and readiness guard now refuses older tzdata | execution-plan.md UT-03 row; test covers Vancouver 2026-03-08 and Toronto 2027-03-14 |
 | B1-F2 | UR-3 names a model confidence threshold but no number | PRD.md UR-3: 0.80 `[P]`, owner to confirm; code constant `MODEL_CONFIDENCE_THRESHOLD` cites it |
 | B1-F3 | A request with no rule hit has no tier until the model answers; defaulting it to `uncertain` and then letting the model set `routine` contradicts "a model never lowers a tier" | schema.md 3.2 and 3.5: `tier_source = 'pending'` (shown as `uncertain`, first decision may be any tier) |
 | B1-F4 | `escalation_steps` unique key cannot hold two people paged at the same step (EP-5 both operators; EP-11 acknowledger with Level 1; FD-3 approver with Level 1) | schema.md 3.5: `target_role` in the key |
@@ -245,8 +247,31 @@ Not run: UT-08, IT-05, IT-15, IT-17, E2E-01, E2E-02, E2E-05..E2E-10, classifier 
 | B1-F7 | `packages/db` may import only `packages/platform`, and apps may not import each other, so workflows shared by web and worker had no home | TRD 5: `packages/services`; AGENTS.md 5 |
 | B1-F8 | pg-boss replaced by a `jobs` table and view `due_jobs` | TRD AD-02 and 6.3, schema.md 4 and 3.5 |
 | B1-F9 | The repository root may hold only the planning files, `.gitignore` and `Makefile` during B1, so the TRD layout lives under `code/`; `pnpm` and Docker are not installed, so commands are npm scripts and Compose stays proposed | TRD 5 and 7, AGENTS.md state line and section 12, execution-plan 8 note |
-| B1-F10 | T-2.2.1 says a message to an unknown destination is "stored for the operator", but no table exists and a global table would hold message text outside any account | Not changed; open gap in schema.md 3.5; needs an owner decision |
+| B1-F10 | T-2.2.1 says a message to an unknown destination is "stored for the operator", but no table existed; the reviewer also found that a correctly addressed email in another letter case was dropped | Fixed in round 1 (B1-004): `unrouted_inbound`, metadata only, alerts through `/readyz`; case-insensitive resolution. Keeping message text for the operator remains an owner decision |
 | B1-F11 | TRD 6.2's note ("SMS undelivered and call unanswered" is not a double failure) means an unanswered call is not a delivery failure | Implemented as written: Twilio `no-answer`/`busy` map to `sent`; only `failed`/`canceled` calls count for EP-4 |
 | B1-F12 | When the previous acknowledger or approver is also the Level 1 on-call person, EP-11/FD-3 page them twice | Not changed; a duplicate page is acceptable (TRD 6.3) |
 
 These edits were made by the developer and have not been re-reviewed.
+
+### 7.5 Fix round 1 (2026-11-11)
+
+Review `_coordination/review/fixtriage-b1-round1.md` (independent reviewer, HEAD `df7a4eb`): 1 blocker, 4 majors, 5 minors. All fixed on `feat/b1-foundation`, code commit `699c429`; not re-reviewed yet.
+
+| Finding | Fix | Regression test (under `code/`) |
+|---|---|---|
+| B1-001 blocker: an undecided after-hours request whose classify job died never paged; `/readyz` stayed green | Deterministic sweep `sweepUndecided` in the safety loop over new view `due_undecided`: a `pending` request becomes `uncertain` 30 s after receipt (PRD UR-3 `[P]`) and follows EP-8 (after hours at once, business hours at 15 min), independent of the classify job; model output validated strictly; `/readyz` fails on any dead job and on an overdue undecided request | `apps/web/test/fix-round1.test.ts` B1-001 (4 cases incl. dead classify job -> page and red readyz; business-hours 15 min); view-vs-constant check |
+| B1-002 major: classification shared the worker loop with outbox and tick; a client ignoring abort hung it | Worker runs two loops: safety loop (intake, sweep, tick, dispatch watch, outbox, status retry) and model loop (`processClassifyJobs`, concurrency 4, each job raced against a runner-enforced hard timeout; each model call also raced); `processDueJobs` never runs model jobs | fix-round1 B1-002: 8 queued classify jobs on an abort-ignoring model; the gas safety reply and the life_safety page leave in one safety pass under 2 s; the model runner returns within its hard timeout |
+| B1-003 major: 5 of the reviewer's 34 phrasings had no rule floor | Rule set v2 (v1 frozen): negations ("doesnt/does not/isnt/wont/won t" of heat, heater, furnace, boiler, radiator, power), falls, unit cannot be secured, spreading leaks; v2 normaliser for split contractions and short-word misspellings (gass, gaz, smel, heet, smoek) | UT-01 fixture now 269 items incl. all 34 reviewer phrasings and 25 more; UT-02 routine negatives; fix-round1 B1-003 (7 phrasings, model routine 0.95 after hours -> paged) |
+| B1-004 major: case-variant email and unknown destinations dropped | `unrouted_inbound` (metadata only) with `/readyz` alert; Postmark answered 503 so it retries, Twilio 200 (no inbound retry); `lower(address)` unique index and comparison; malformed correlation IDs replaced instead of failing ingest | fix-round1 B1-004 (3 cases); IT-10 case-insensitive resolution |
+| B1-005 major: building-wide flag suppressed a second-unit life_safety report | `du4Decision`: `life_safety` always reopens; PRD DU-4(d) states the exception does not cover life_safety | UT-06 case; fix-round1 B1-005 (acknowledged building-wide fire, unit 305 smoke -> reopened, Level 1 paged) |
+| B1-006 minor: confidence 1.5 accepted | `validateModelAnswer`: finite, in [0, 1], known lower-case tier, else `malformed` -> `uncertain` | UT-02 (8 invalid answers); fix-round1 B1-001/006 (12, Infinity, 1.5, -1) |
+| B1-007 minor: check-in on an independent interval | Check-in only after a completed safety pass | fix-round1 B1-007: a hung outbox send stops check-ins |
+| B1-008 minor: legal source and guard | SRC-23 cited (Decision.md 13, TRD 12, execution-plan UT-03); `checkTimezoneData` at web and worker start and in `/readyz` (tzdata >= 2026e and Vancouver winter offset UTC-7); East Kootenay noted | fix-round1 B1-008 |
+| B1-009 minor: invalid calendar could fail T1 | Trigger `accounts_validate`; `afterHours` treats an unevaluable calendar as after hours | fix-round1 B1-009 (2 cases) |
+| B1-010 minor: ASVS not read by the reviewer | No code change; no ASVS claim is made (TRD 8.7 rows stay "planned, not verified") | — |
+
+Commands, from `code/`, clean test database (`npm run db:reset-test` applied `0000`..`0003`): `npm run lint` 0 problems; `npm run typecheck` 0 errors; `npm run check:migrations`: order linear, no pending drizzle change, ORM vs database diff empty; `npm test` **24 files, 139 passed, 0 failed**; `npm run dev` healthy with the new readiness checks green.
+
+Reviewer's script `fixtriage-b1-adversarial.mts` (not edited): before **23/35**, after **34/35**. The remaining FAIL, A13b, counts rows in `inbound_messages`; the message to an unknown number is now kept in `unrouted_inbound` (metadata only, which the review's retest condition accepts) and alerts through `/readyz`, so the case's check is narrower than its retest condition. A10a and A11 call `processDueJobs`, which no longer runs model jobs; the abort-ignoring client is covered by the runner test above.
+
+Documents changed in round 1: PRD (UR-3 invalid output and 30 s deadline `[P]`, DU-4(d) life_safety), TRD (5.1 readiness, 6.3 classify runner and check-in, 8.9, 12 tz guard), schema.md (3.5 round-1 table, 4 views, 5 indexes), Decision.md (SRC-23 source row only; decision text unchanged), execution-plan (UT-03 note), AGENTS.md (utilities index), this file. Not re-reviewed.

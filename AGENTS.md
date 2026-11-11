@@ -79,6 +79,11 @@ Utilities index (B1, paths under `code/`):
 | Account-scoped database helper, resolvers, poll views | `packages/db/src/client.ts` | `withAccount`, `resolvers`, `poll`, `oldestDue` |
 | Migration runner, ORM-diff check | `packages/db/src/migrate.ts`, `orm-diff.ts` (entry `@fixtriage/db/migrate`) | `migrate`, `ormDiff` |
 | Clock | `packages/platform/src/clock.ts` | `systemClock`, `FakeClock` |
+| Decision-deadline sweep (B1-001) | `packages/services/src/decide.ts` | `sweepUndecided` |
+| Model-output validation (B1-001, B1-006) | `packages/core/src/final-tier.ts` | `validateModelAnswer` |
+| Rule set v2 (B1-003) | `packages/core/src/rules/lexicon-v2.ts` | `RULES_V2`, `CURRENT_RULES` |
+| tz database guard (B1-008) | `packages/platform/src/tzdata.ts` | `checkTimezoneData` |
+| Job runners: safety loop and model loop (B1-002) | `packages/services/src/jobs.ts` | `processDueJobs`, `processClassifyJobs` |
 
 ## 7. Account safety
 

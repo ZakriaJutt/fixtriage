@@ -96,7 +96,7 @@ All staff routes need a session and derive `account_id` from it, never from the 
 | `POST /api/privacy-requests` | MH-15 | |
 | `GET/POST /a/:token` | Acknowledge link | Capability token; GET shows, POST acts |
 | `GET/POST /v/:token` | Vendor confirm or decline | Capability token |
-| `GET /healthz`, `GET /readyz` | Liveness; readiness: database, queue, storage, **and** age of the oldest due escalation step, oldest pending outbox row and oldest `classify` job (fails above 60 s), so a running but stuck worker is visible from outside | Probed by the external monitor |
+| `GET /healthz`, `GET /readyz` | Liveness; readiness: database, queue, storage, **and** age of the oldest due escalation step, oldest pending outbox row and oldest `classify` job (fails above 60 s), so a running but stuck worker is visible from outside | Probed by the external monitor. B1 fix round 1 adds: age of the oldest undecided request (view `due_undecided`, B1-001), dead jobs (B1-001), uncleared unrouted inbound messages (B1-004), tz database check (B1-008) |
 | `/ops/*` | Operator console | `operator` role, separate audit |
 
 ## 6. Runtime view
@@ -166,14 +166,14 @@ sequenceDiagram
 |---|---|---|---|---|
 | `outbox.send` | Outbox row `pending` | 10 s; 3 tries over 60 s | `outbound_messages.dedupe_key` | Row `failed`; pages and safety replies raise an operator alert; a failed page counts as a failed channel (EP-4) |
 | `intake.process` (B1) | Inbound stored (T1 enqueues it with the safety reply) | 5 tries, backoff | `inbound_message_id` | Dead job; `/readyz` job age fails at 60 s |
-| `classify` | `intake.process` done | 8 s per call, 2 tries, 20 s total | `(inbound_message_id, model_version)` | Tier `uncertain` (UR-3) |
+| `classify` | `intake.process` done; runs only in the worker's separate model loop with its own concurrency and a runner-enforced hard timeout (20 s budget + 5 s), never in the loop that sends the outbox and ticks escalations (B1-002) | 8 s per call, 2 tries, 20 s total | `(inbound_message_id, model_version)` | Tier `uncertain` (UR-3) |
 | `escalation.tick` | Every 15 s | 10 s; single-flight per escalation by row lock | `(escalation_id, cycle, level, attempt)` unique | Missed tick is caught by the next; lateness alert at 60 s |
 | `dispatch.watch` | Every 30 s | — | `(dispatch_id, check)` | FD-4; for an emergency dispatch it creates a reopened escalation with trigger `dispatch_failed` (EP-11b), unique per dispatch |
 | `media.fetch` | MMS or email attachment | 30 s; 5 tries | `(inbound_message_id, index)` | Attachment `unavailable`, shown to staff; text still processed |
 | `digest.daily`, `retention.sweep` | Schedule | Resumable by cursor | `(account_id, date)` | Operator alert |
 | `export.build` | User | 5 min | `export_id` | Export `failed`, retry button |
 | `probe.run` | Every 6 h, platform numbers only | 5 min to see the round trip | `probe_run_id` | Failed probe makes `/readyz` fail, which the external monitor alerts |
-| check-in (not a queue job) | `web` and `worker` main loops, every 60 s | 5 s | — | Nothing to do in-process: silence is detected by the external monitor after 180 s |
+| check-in (not a queue job) | `web` every 60 s; `worker` after a completed safety-loop pass, at most every 60 s (B1-007: a stuck loop goes silent) | 5 s | — | Nothing to do in-process: silence is detected by the external monitor after 180 s |
 
 Rules for events and timeouts:
 - Out-of-order or duplicate events (R-01): state columns move only forward by a rank table; every transition checks `version`; a late `delivered` after `failed` is recorded but does not undo an escalation advance.
@@ -297,7 +297,7 @@ A planned control is not compliance. Status of every row: **planned, not verifie
 
 ### 8.9 Liveness and channel monitoring
 
-Rule: **nothing watches itself.** The worker cannot report its own death, so detection lives in an external monitor.
+Rule: **nothing watches itself.** B1 fix round 1: the worker's check-in is sent only after a completed pass of the safety loop (outbox, tick, decision sweep), so a hung loop is seen as silence (B1-007); model calls run in a separate loop (B1-002); a request still undecided 30 s after receipt is made `uncertain` by a deterministic sweep in the safety loop, independent of the classify job (B1-001). The worker cannot report its own death, so detection lives in an external monitor.
 
 | Failure | Signal | Interval | Worst-case time to alert |
 |---|---|---|---|
@@ -351,5 +351,7 @@ Operating cost per account is the `[C]` assumption in Decision.md 7.1; infrastru
 Production risks R-01..R-22 live only in the [verification file](verification-report-fixing.md#6-production-risk-register). Debt accepted: no voice intake; one region; no antivirus scan; capability links; single operator during the pilot.
 
 ## 12. Glossary
+
+After-hours depends on the tz database: BC is UTC-7 all year from 2026-03-08 (Decision.md SRC-23); web and worker refuse to start, and `/readyz` fails, if the runtime's tzdata is older than 2026e or America/Vancouver's winter offset is not UTC-7 (B1-008). Accounts in East Kootenay or Golden, which still change clocks with Alberta, use `America/Edmonton`. An account's time zone and business hours are validated on write (trigger `accounts_validate`); a calendar that still cannot be evaluated counts as after hours (B1-009).
 
 Account: paying brokerage. Tenant: renter. Request: one tenant's report. Incident: one real-world problem, possibly several requests. Escalation: the paging process for an incident. Page: voice call plus SMS to a staff phone. Dispatch: an approved message to a vendor. After hours: outside the account's configured business hours in `America/Vancouver`, including holidays the account lists.
