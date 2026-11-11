@@ -1,11 +1,12 @@
 // Deterministic rule engine (MH-03, UR-1..UR-3, UR-7). Pure: no I/O, no clock.
 import { maxTier, tierRank, type Tier } from '../tiers';
 import { ENGLISH_VOCAB, type HazardClass, type Phrase, type Rule } from './lexicon-v1';
-import { RULES_V2 } from './lexicon-v2';
+import { RULES_V3 } from './lexicon-v3';
+import { safetyCandidate } from './safety-candidate';
 
 /** Current rule set. v1 is kept for the decisions stored with it; v2 adds B1-003 phrasings and the v2 normaliser. */
-export const RULE_SET_VERSION = 2;
-export const CURRENT_RULES: Rule[] = RULES_V2;
+export const RULE_SET_VERSION = 3;
+export const CURRENT_RULES: Rule[] = RULES_V3;
 
 export interface RuleInput {
   text: string | null;
@@ -24,6 +25,9 @@ export interface RuleResult {
   /** Matched rule of the highest tier (first in rule order). */
   primaryRule: string | null;
   hazardClass: HazardClass;
+  /** Fix round 2: stem/fuzzy safety-candidate layer (see safety-candidate.ts). */
+  safetyCandidate: boolean;
+  candidateCues: string[];
 }
 
 const SUBSTITUTIONS: Record<string, string> = {
@@ -117,7 +121,7 @@ function phraseMatches(p: Phrase, tokens: string[]): boolean {
 }
 
 const VOCAB = new Set<string>(ENGLISH_VOCAB);
-for (const r of RULES_V2) for (const p of r.phrases) for (const t of p.tokens) if (!t.endsWith('*')) VOCAB.add(t);
+for (const r of RULES_V3) for (const p of r.phrases) for (const t of p.tokens) if (!t.endsWith('*')) VOCAB.add(t);
 
 function isLexiconLanguage(text: string, tokens: string[]): boolean {
   // Any letter outside the Latin script means the text is outside the lexicon's language.
@@ -151,6 +155,10 @@ export function evaluateRules(input: RuleInput, rules: Rule[] = CURRENT_RULES): 
     matchedRules: matched.map((r) => r.id),
     primaryRule: primary?.id ?? null,
     hazardClass: primary?.hazardClass ?? 'unknown',
+    ...(() => {
+      const c = safetyCandidate(tokens);
+      return { safetyCandidate: c.candidate || matched.length > 0, candidateCues: c.cues };
+    })(),
   };
 }
 
@@ -158,4 +166,15 @@ export function evaluateRules(input: RuleInput, rules: Rule[] = CURRENT_RULES): 
 export function ruleFloor(r: RuleResult): Tier | null {
   if (r.ruleTier === null && r.uncertaintyFloor === null) return null;
   return maxTier(r.ruleTier, r.uncertaintyFloor);
+}
+
+/**
+ * Floor applied at intake (fix round 2): the rule floor, else `uncertain` for an after-hours safety candidate, so
+ * that a model "routine" alone can never close it (it is decided `uncertain` and paged under EP-8). Business hours:
+ * the candidate flag is recorded but sets no floor.
+ */
+export function intakeFloor(r: RuleResult, afterHours: boolean): Tier | null {
+  const f = ruleFloor(r);
+  if (f !== null) return f;
+  return afterHours && r.safetyCandidate ? 'uncertain' : null;
 }

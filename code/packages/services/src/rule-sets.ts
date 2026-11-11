@@ -2,9 +2,13 @@
 // never rewritten. v1 is kept for decisions made with it; the current version is the one evaluateRules uses.
 import { createHash } from 'node:crypto';
 import pg from 'pg';
-import { RULE_SET_VERSION, RULES_V1, RULES_V2 } from '@fixtriage/core';
+import { RULE_SET_VERSION, RULES_V1, RULES_V2, RULES_V3, SAFETY_PAIRS, SAFETY_STEMS } from '@fixtriage/core';
 
-const DEFINITIONS: Record<number, unknown> = { 1: RULES_V1, 2: { normaliser: 2, rules: RULES_V2 } };
+const DEFINITIONS: Record<number, unknown> = {
+  1: RULES_V1,
+  2: { normaliser: 2, rules: RULES_V2 },
+  3: { normaliser: 2, rules: RULES_V3, safetyCandidate: { stems: SAFETY_STEMS, pairs: SAFETY_PAIRS } },
+};
 
 export function ruleSetChecksum(version: number = RULE_SET_VERSION): string {
   return createHash('sha256').update(JSON.stringify(DEFINITIONS[version])).digest('hex');

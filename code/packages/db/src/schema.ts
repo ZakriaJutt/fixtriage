@@ -740,7 +740,8 @@ export const jobs = pgTable(
   (t) => [
     unique('jobs_account_dedupe_uq').on(t.accountId, t.dedupeKey),
     oneOf('jobs_kind_values', t.kind, ['intake.process', 'classify', 'triage.timeout']),
-    oneOf('jobs_state_values', t.state, ['queued', 'done', 'dead']),
+    // `dismissed`: an operator cleared a dead job (fix round 2); the decision sweep still covers its request (B1-001).
+    oneOf('jobs_state_values', t.state, ['queued', 'done', 'dead', 'dismissed']),
     index('jobs_due_idx').on(t.runAt).where(sql`state = 'queued'`),
     isolation('jobs'),
   ],
@@ -831,5 +832,5 @@ export const CUSTOM_OBJECTS = {
   constraints: ['oncall_shifts_no_overlap'],
   triggers: ['requests_tier_guard', 'incidents_tier_guard', 'audit_events_no_change', 'accounts_validate'],
   functions: ['resolve_channel', 'resolve_session', 'resolve_login', 'resolve_capability', 'resolve_outbound'],
-  views: ['due_escalations', 'pending_outbox', 'due_dispatches', 'sweep_accounts', 'due_jobs', 'due_undecided', 'job_health'],
+  views: ['due_escalations', 'pending_outbox', 'due_dispatches', 'sweep_accounts', 'due_jobs', 'due_undecided', 'job_health', 'dead_jobs'],
 } as const;

@@ -8,7 +8,11 @@ import {
   ackByVoice,
   ackIncidentFromApp,
   applyDeliveryStatus,
+  actOnDeadJob,
   approveDispatch,
+  authenticateOperator,
+  listDeadJobs,
+  OperatorOnlyError,
   AuthError,
   authenticate,
   ConflictError,
@@ -76,7 +80,7 @@ export function createHandlers(deps: WebDeps): Record<string, Handler> {
             return error(e.code === 'csrf' ? 403 : 401, e.code, cid);
           }
           if (e instanceof NotFoundError) return error(404, 'not_found', cid);
-          if (e instanceof ForbiddenError) return error(403, 'forbidden', cid);
+          if (e instanceof ForbiddenError || e instanceof OperatorOnlyError) return error(403, 'forbidden', cid);
           if (e instanceof ConflictError) return error(409, e.code, cid);
           log.error('handler.error', { route: name, error: e instanceof Error ? e.name : 'unknown' });
           return error(500, 'internal', cid);
@@ -242,6 +246,24 @@ export function createHandlers(deps: WebDeps): Record<string, Handler> {
         }));
         return json(r.status, r.body);
       });
+    }),
+
+    // Operator console (TRD 5.1 `/ops/*`): dead jobs keep /readyz red until an operator retries or clears them.
+    'GET /ops/jobs/dead': traced('ops.jobs.dead', async (req) => {
+      await authenticateOperator(deps, cookie(req, SESSION_COOKIE), null, false);
+      return json(200, { jobs: await listDeadJobs(deps) });
+    }),
+
+    'POST /ops/jobs/:id/requeue': traced('ops.jobs.requeue', async (req, params) => {
+      const op = await authenticateOperator(deps, cookie(req, SESSION_COOKIE), req.headers.get(CSRF_HEADER), true);
+      const body = (await req.json().catch(() => ({}))) as { reason?: string };
+      return json(200, await actOnDeadJob(deps, op, { jobId: idParam(params), action: 'requeue', reason: body.reason ?? '' }));
+    }),
+
+    'POST /ops/jobs/:id/dismiss': traced('ops.jobs.dismiss', async (req, params) => {
+      const op = await authenticateOperator(deps, cookie(req, SESSION_COOKIE), req.headers.get(CSRF_HEADER), true);
+      const body = (await req.json().catch(() => ({}))) as { reason?: string };
+      return json(200, await actOnDeadJob(deps, op, { jobId: idParam(params), action: 'dismiss', reason: body.reason ?? '' }));
     }),
 
     'GET /a/:token': traced('ack_link.get', async (_req, params, cid) => {

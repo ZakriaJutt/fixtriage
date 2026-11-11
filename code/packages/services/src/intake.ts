@@ -10,7 +10,7 @@ import {
   pickContacts,
   renderPurposeNotice,
   renderSafetyReply,
-  ruleFloor,
+  intakeFloor,
   CURRENT_RULES,
   suggestsDuplicate,
   tierRank,
@@ -152,7 +152,8 @@ export async function processIntake(tx: Tx, deps: Deps, accountId: string, inbou
   const account = await loadAccount(tx, accountId);
   const ah = afterHours(account, msg.receivedAt);
   const rules = evaluateRules({ text: msg.body, hasMedia: msg.mediaCount > 0, afterHours: ah });
-  const floor = ruleFloor(rules);
+  // Fix round 2: an after-hours safety candidate (stem/fuzzy layer) is at least `uncertain`, decided at intake.
+  const floor = intakeFloor(rules, ah);
   const [chan] = await tx.select({ kind: tables.channels.kind }).from(tables.channels).where(eq(tables.channels.id, msg.channelId));
   const cannotText = chan?.kind === 'sms' && (await smsOptedOut(tx, msg.fromAddress, msg.receivedAt));
   const contact = msg.tenantContactId ? (await tx.select().from(tables.tenantContacts).where(eq(tables.tenantContacts.id, msg.tenantContactId)))[0] : undefined;
@@ -187,7 +188,7 @@ export async function processIntake(tx: Tx, deps: Deps, accountId: string, inbou
         unitId: contact?.unitId ?? null,
         cannotText,
         tier: floor ?? 'uncertain', // UR-3: never routine by default
-        tierSource: rules.ruleTier ? 'rule' : rules.uncertaintyFloor ? 'uncertainty' : 'pending',
+        tierSource: rules.ruleTier ? 'rule' : floor !== null ? 'uncertainty' : 'pending',
         afterHours: ah,
         openedAt: msg.receivedAt,
         createdAt: now,
@@ -207,7 +208,7 @@ export async function processIntake(tx: Tx, deps: Deps, accountId: string, inbou
     matchedRule: rules.primaryRule,
     proposedTier: floor,
     status: 'ok',
-    reason: rules.uncertaintyReason,
+    reason: rules.uncertaintyReason ?? (rules.ruleTier === null && floor === 'uncertain' ? 'safety_candidate' : null),
     createdAt: now,
   });
   await enqueueJob(tx, accountId, 'classify', { inboundId, requestId: request.id }, `classify:${inboundId}`, now);

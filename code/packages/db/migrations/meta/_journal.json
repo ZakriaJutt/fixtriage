@@ -29,6 +29,20 @@
       "when": 1794355917816,
       "tag": "0003_fix_round1",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794356983973,
+      "tag": "0004_jobs_dismissed",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794356984314,
+      "tag": "0005_fix_round2",
+      "breakpoints": true
     }
   ]
 }

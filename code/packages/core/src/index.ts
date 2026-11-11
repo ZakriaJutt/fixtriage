@@ -10,3 +10,5 @@ export * from './templates';
 export * from './rules/lexicon-v1';
 export * from './rules/engine';
 export * from './rules/lexicon-v2';
+export * from './rules/lexicon-v3';
+export * from './rules/safety-candidate';

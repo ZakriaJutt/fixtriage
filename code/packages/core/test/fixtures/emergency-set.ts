@@ -261,6 +261,12 @@ export const EMERGENCY_SET: EmergencyItem[] = [
     'power doesnt work', 'electricity is not working', 'boiler isnt working', 'thermostat doesnt work no heat', 'back door wont lock', 'balcony door cant lock',
     'water is coming in under the door', 'leaking badly from upstairs', "the heat won't come on", 'Heat Doesnt Work!!', 'our heater died',
   ], { afterHours: true }),
+  // B1 fix round 2 (B1-003 residue): burst/busted/bursted and broken water mains (reviewer's four phrasings first).
+  ...make('review-r2-urgent', 'urgent', [
+    'pipe bursted under the sink', 'the pipe has bursted', 'pipes busted', 'water main broke',
+    'pipe brust in basement', 'burstd pipe', 'the pipe split open', 'watermain break on our street', 'pipe cracked and spraying', 'hose bursted on washer',
+    'pipe blew in the wall', 'water main busted', 'my pipes bust', 'pipe broken under kitchen', 'the water main burst outside', 'Pipe Busted!!', 'pipes bursting in the ceiling',
+  ], { afterHours: true }),
   ...make('mixed-urgent', 'urgent', [
     'leak in ceiling and no heat',
     'no power and no water',

@@ -7,7 +7,7 @@ import { checkJournalOrder, migrate, ormDiff } from '@fixtriage/db/migrate';
 import { seedRuleSets } from '@fixtriage/services';
 
 const url = ownerUrl('test');
-const ALL = ['0000_tables', '0001_rls_functions_views_grants', '0002_unrouted_inbound', '0003_fix_round1'];
+const ALL = ['0000_tables', '0001_rls_functions_views_grants', '0002_unrouted_inbound', '0003_fix_round1', '0004_jobs_dismissed', '0005_fix_round2'];
 
 describe('IT-14 migrations', () => {
   it('migrates an empty database cleanly with an empty ORM diff, and a second run applies nothing', async () => {

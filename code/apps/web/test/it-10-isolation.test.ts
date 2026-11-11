@@ -109,6 +109,7 @@ describe('IT-10 cross-account isolation', () => {
       due_jobs: ['id', 'account_id', 'run_at', 'kind'],
       due_undecided: ['id', 'account_id', 'due_at'],
       job_health: ['dead_jobs'],
+      dead_jobs: ['id', 'account_id', 'kind', 'attempts', 'last_error', 'created_at'],
     };
     for (const [v, cols] of Object.entries(views)) {
       const r = await owner((c) => c.query(`select column_name from information_schema.columns where table_name = $1 order by ordinal_position`, [v]));

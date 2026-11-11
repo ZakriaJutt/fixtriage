@@ -147,6 +147,14 @@ export async function seedOperators(): Promise<{ primary: string; backup: string
   });
 }
 
+/** A signed-in operator session (operator sign-in itself is T-2.1.3, not in B1). */
+export async function seedOperatorSession(operatorId: string): Promise<{ cookie: string; csrf: string }> {
+  const token = randomBytes(32).toString('base64url');
+  const csrf = randomBytes(32).toString('base64url');
+  await owner((c) => c.query(`insert into sessions (operator_id, token_hash, csrf_token_hash, last_seen_at, expires_at) values ($1, $2, $3, now(), now() + interval '7 days')`, [operatorId, sha256(token), sha256(csrf)]));
+  return { cookie: `${SESSION_COOKIE}=${token}`, csrf };
+}
+
 /** A signed-in staff session (sign-in itself is T-2.1.3, not in B1). Returns the cookie and anti-forgery token. */
 export async function seedSession(userId: string): Promise<{ cookie: string; csrf: string }> {
   const token = randomBytes(32).toString('base64url');
