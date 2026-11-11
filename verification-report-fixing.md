@@ -275,3 +275,33 @@ Commands, from `code/`, clean test database (`npm run db:reset-test` applied `00
 Reviewer's script `fixtriage-b1-adversarial.mts` (not edited): before **23/35**, after **34/35**. The remaining FAIL, A13b, counts rows in `inbound_messages`; the message to an unknown number is now kept in `unrouted_inbound` (metadata only, which the review's retest condition accepts) and alerts through `/readyz`, so the case's check is narrower than its retest condition. A10a and A11 call `processDueJobs`, which no longer runs model jobs; the abort-ignoring client is covered by the runner test above.
 
 Documents changed in round 1: PRD (UR-3 invalid output and 30 s deadline `[P]`, DU-4(d) life_safety), TRD (5.1 readiness, 6.3 classify runner and check-in, 8.9, 12 tz guard), schema.md (3.5 round-1 table, 4 views, 5 indexes), Decision.md (SRC-23 source row only; decision text unchanged), execution-plan (UT-03 note), AGENTS.md (utilities index), this file. Not re-reviewed.
+
+### 7.6 Retest (round 2) and fix round 2 (2026-11-11)
+
+Reviewer's verdicts from `_coordination/review/fixtriage-b1-verdicts.json`, copied unchanged (retest of HEAD `9edfd54`):
+
+```json
+{
+  "B1-001": "Closed",
+  "B1-002": "Closed",
+  "B1-003": "Closed, part open: 'pipe bursted under the sink', 'the pipe has bursted', 'pipes busted' and 'water main broke' have no rule floor in rule set v2 (s('burst') is exact; 'burst' and 'busted' are under the 6-letter fuzzy limit); after hours with model routine 0.95 the request ends routine with 0 pages (N4b)",
+  "B1-004": "Closed",
+  "B1-005": "Closed",
+  "B1-006": "Closed",
+  "B1-007": "Closed",
+  "B1-008": "Closed",
+  "B1-009": "Closed",
+  "B1-010": "Still open: reviewer note only (no ASVS 5.0.0 IDs cited); unchanged by design"
+}
+```
+
+Edits made after that retest (**fixed after retest**, not re-reviewed), code commit `91b6c0a`:
+
+| Item | Fix | Regression test (under `code/`) |
+|---|---|---|
+| B1-003 residue: "pipe bursted under the sink", "the pipe has bursted", "pipes busted", "water main broke" had no rule tier; after hours a model `routine` 0.95 paged nobody | Rule set v3: `burst*`, `brust*`, pipe with bust/broke/split/crack/blew/exploded, water main, hose or tank burst. Ruling's stem layer: `safetyCandidate` marks a message by word stems (burst, bust, leak, flood, gas, smoke, fire, spark, monoxide, heat, sewage and others) with prefix and edit-distance tolerance (5+ letters), weak stems only in pairs; after hours a candidate with no rule tier is decided `uncertain` at intake (`intakeFloor`), so the model alone can never close it and it is paged (EP-8). PRD UR-3 `[P]` | UT-01: fixture set 286 items incl. the four phrasings and 13 more burst/main variants; the stem layer alone marks every English emergency fixture; 6 candidate and 9 non-candidate texts. `apps/web/test/fix-round2.test.ts`: the four phrasings after hours with model routine -> urgent, paged; three candidate texts with no rule tier after hours with model routine -> `uncertain`, Level 1 paged; the same in business hours may be routine |
+| Reviewer note (round 2): `/readyz` stays red until dead jobs are cleared, no route | `GET /ops/jobs/dead`, `POST /ops/jobs/:id/requeue` and `/dismiss`: role `operator` only (staff 403, anonymous 401), anti-forgery token, reason required, audit row with the operator as actor; job state `dismissed`; view `dead_jobs` | fix-round2 operator cases (3): refusals, requeue -> `/readyz` dead_jobs green and job then runs, dismiss |
+
+Commands, from `code/`, clean test database (`npm run db:reset-test` applied `0000`..`0005`): `npm run lint` 0 problems; `npm run typecheck` 0 errors; `npm run check:migrations`: order linear, drizzle-kit no pending change, ORM vs database diff empty; `npm test` **25 files, 167 passed, 0 failed**. Reviewer's round-2 script `fixtriage-b1-adversarial.mts` (not edited): **41/41 passed** (it reported 40/42 at `9edfd54`).
+
+B1-010 stays open as the reviewer's note (no ASVS 5.0.0 IDs cited; no compliance claimed). Documents changed in this round: PRD (UR-3 safety-candidate floor), TRD (5.1 `/ops/*`, 8.5 "Not AI"), schema.md (3.5 round-2 table, 4 `dead_jobs`), AGENTS.md (utilities index), this file. Not re-reviewed.

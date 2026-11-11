@@ -82,6 +82,8 @@ Utilities index (B1, paths under `code/`):
 | Decision-deadline sweep (B1-001) | `packages/services/src/decide.ts` | `sweepUndecided` |
 | Model-output validation (B1-001, B1-006) | `packages/core/src/final-tier.ts` | `validateModelAnswer` |
 | Rule set v2 (B1-003) | `packages/core/src/rules/lexicon-v2.ts` | `RULES_V2`, `CURRENT_RULES` |
+| Rule set v3 and safety-candidate layer (fix round 2) | `packages/core/src/rules/lexicon-v3.ts`, `safety-candidate.ts` | `RULES_V3`, `safetyCandidate`, `intakeFloor` |
+| Operator dead-job actions (fix round 2) | `packages/services/src/ops.ts` | `listDeadJobs`, `actOnDeadJob`, `authenticateOperator` |
 | tz database guard (B1-008) | `packages/platform/src/tzdata.ts` | `checkTimezoneData` |
 | Job runners: safety loop and model loop (B1-002) | `packages/services/src/jobs.ts` | `processDueJobs`, `processClassifyJobs` |
 

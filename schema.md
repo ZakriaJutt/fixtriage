@@ -127,6 +127,15 @@ Fix round 1 (2026-11-11, review fixtriage-b1-round1.md):
 | trigger `accounts_validate` | Rejects an unknown time zone or malformed business hours | B1-009 |
 | `rule_sets` | Version 2 seeded (v1 kept, unchanged checksum); new decisions store `rule_set_version = 2` | B1-003 |
 
+Fix round 2 (2026-11-11, review fixtriage-b1-round2.md), fixed after retest:
+
+| Object | Change | Finding |
+|---|---|---|
+| `rule_sets` | Version 3 seeded (burst variants, water main; the definition also stores the safety-candidate stems and pairs); new decisions store `rule_set_version = 3` | B1-003 residue |
+| `classifications` | Rule row `reason = 'safety_candidate'` when the after-hours candidate floor set `uncertain` | B1-003 residue |
+| `jobs` | State value `dismissed` (operator cleared a dead job) | reviewer note, round 2 |
+| view `dead_jobs` (new) | `id`, `account_id`, `kind`, `attempts`, `last_error` (error class), `created_at`; read only by the operator route | reviewer note, round 2 |
+
 ## 4. Permissions, account boundary, uniqueness
 
 | Object | `owner` | `manager` | `operator` | `web` service role | `worker` service role |
@@ -156,6 +165,7 @@ Fix round 1 (2026-11-11, review fixtriage-b1-round1.md):
 | view `due_jobs` (B1) | job runners (safety loop: `intake.process`, `triage.timeout`; model loop: `classify`) | `id`, `account_id`, `run_at`, `kind` |
 | view `due_undecided` (B1-001) | decision sweep in the safety loop | `id`, `account_id`, `due_at` |
 | view `job_health` (B1-001) | `/readyz` | `dead_jobs` (a count) |
+| view `dead_jobs` (fix round 2) | operator routes `/ops/jobs/*` (role `operator`, audited) | `id`, `account_id`, `kind`, `attempts`, `last_error`, `created_at` |
 
   None returns message text, names, phone numbers or addresses. Tables `operators`, `rule_sets`, `probe_runs` are global and hold no tenant data. IT-10 calls every function and view with crafted inputs and checks the column list.
 - Cross-account denial: a foreign-key lookup of another account's ID returns "not found"; composite foreign keys `(account_id, id)` on child tables prevent a row in one account from referencing a parent in another. References to `operators` (`escalation_steps.target_operator_id`, `escalations.operator_engaged_by`, `relayed_by_operator_id`, `sessions.operator_id`) are plain foreign keys because operators belong to no account.

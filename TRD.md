@@ -97,7 +97,7 @@ All staff routes need a session and derive `account_id` from it, never from the 
 | `GET/POST /a/:token` | Acknowledge link | Capability token; GET shows, POST acts |
 | `GET/POST /v/:token` | Vendor confirm or decline | Capability token |
 | `GET /healthz`, `GET /readyz` | Liveness; readiness: database, queue, storage, **and** age of the oldest due escalation step, oldest pending outbox row and oldest `classify` job (fails above 60 s), so a running but stuck worker is visible from outside | Probed by the external monitor. B1 fix round 1 adds: age of the oldest undecided request (view `due_undecided`, B1-001), dead jobs (B1-001), uncleared unrouted inbound messages (B1-004), tz database check (B1-008) |
-| `/ops/*` | Operator console | `operator` role, separate audit |
+| `/ops/*` | Operator console | `operator` role, separate audit. B1 fix round 2 implements `GET /ops/jobs/dead`, `POST /ops/jobs/:id/requeue` and `/dismiss` (anti-forgery token, reason required, audit row in the job's account) so that `/readyz` can return to green after a dead job |
 
 ## 6. Runtime view
 
@@ -234,7 +234,7 @@ One typed configuration module validates the environment at startup for both dep
 | Aspect | Decision |
 |---|---|
 | Responsibility | Propose trade, tier, unit match and missing fields; describe photos; draft the work order summary and vendor message. Vision output can raise a tier only. |
-| Not AI | Tier floor (rules), final tier (UR-5), safety reply, follow-up question wording (fixed bank), business hours, routing, timers, permissions, metrics. |
+| Not AI | Tier floor (rules, and after hours the stem/edit-distance safety-candidate floor `uncertain`, PRD UR-3), final tier (UR-5), safety reply, follow-up question wording (fixed bank), business hours, routing, timers, permissions, metrics. |
 | Model | Hosted Haiku-class model `[C]`; the exact model identifier is pinned in configuration and read from provider documentation at implementation. Provider reached through one interface in `packages/platform` (AD-09). |
 | Fixtures | 50 real requests collected with consent in Phase 0 `[C]`, labelled by two people; a synthetic emergency set of at least 200 messages across UR-1 and UR-2 triggers, misspellings, other languages and photo-only cases `[P]`; an injection set (messages instructing the model to mark itself routine). |
 | Release gates | 90% correct trade and tier on the labelled set `[C]`; on the emergency set, the *final* tier (rules + model + uncertainty) is `life_safety`, `urgent` or `uncertain` for 100% of items `[P]`; on the injection set no item ends `routine` if a rule matched. |
