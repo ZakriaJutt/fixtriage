@@ -47,8 +47,14 @@ export async function loadAccount(tx: Tx, accountId: string): Promise<AccountCon
   };
 }
 
+/** B1-009: a calendar that cannot be evaluated counts as after hours (the safer side: pages at once). */
 export function afterHours(account: AccountContext, at: Date): boolean {
-  return isAfterHours(at, account.calendar);
+  try {
+    return isAfterHours(at, account.calendar);
+  } catch {
+    serviceLog.error('calendar.invalid', { account_id: account.id });
+    return true;
+  }
 }
 
 export class NotFoundError extends Error {
@@ -94,6 +100,8 @@ export async function audit(tx: Tx, a: AuditInput, at: Date): Promise<void> {
 }
 
 export type JobKind = 'intake.process' | 'classify' | 'triage.timeout';
+/** B1-002: model calls run only in the classify runner; every other job runs in the safety loop. */
+export const MODEL_JOB_KINDS: JobKind[] = ['classify'];
 
 export async function enqueueJob(tx: Tx, accountId: string, kind: JobKind, payload: Record<string, unknown>, dedupeKey: string, runAt: Date): Promise<void> {
   await tx

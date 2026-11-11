@@ -1,6 +1,6 @@
 // Worker entry point. Starts without any web-framework module (T-2.1.5).
 import { createDatabase } from '@fixtriage/db';
-import { createLogger, FakeClassifier, FakeMessagingProvider, FakeObjectStorage, HttpMonitorClient, loadConfig, noopMonitor, systemClock } from '@fixtriage/platform';
+import { checkTimezoneData, createLogger, FakeClassifier, FakeMessagingProvider, FakeObjectStorage, HttpMonitorClient, loadConfig, noopMonitor, systemClock } from '@fixtriage/platform';
 import { startWorker } from './worker';
 
 const log = createLogger('worker');
@@ -12,6 +12,13 @@ const config = (() => {
     process.exit(1);
   }
 })();
+
+// B1-008: refuse to run with zone data that would shift every after-hours window.
+const tz = checkTimezoneData();
+if (!tz.ok) {
+  log.error('tzdata.mismatch', { tzdata: tz.tzdata, reason: tz.reason });
+  process.exit(1);
+}
 
 const database = createDatabase(config.DATABASE_URL);
 // B1: providers are fakes only (no accounts, no keys). Real clients are later tasks behind the same interfaces.

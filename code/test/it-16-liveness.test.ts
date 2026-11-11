@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FakeMonitor } from '@fixtriage/monitor-fake';
 import { appUrl } from '@fixtriage/db';
-import { processDueJobs, processOutbox } from '@fixtriage/services';
+import { processClassifyJobs, processDueJobs, processOutbox } from '@fixtriage/services';
 import { harness, owner, resetData, seedAccount, seedOperators, sms, twilioPost, type Harness, type Seeded } from './helpers';
 import { serve } from './http-adapter';
 
@@ -70,12 +70,14 @@ describe('IT-16 liveness from outside the application', () => {
     expect((await fetch(`${web.url}/readyz`)).status).toBe(200);
     await sms(h, s, s.tenants['204'].mobile, 'no heat');
     await processDueJobs(h.deps); // jobs and outbox keep running; the tick never does from here on
+    await processClassifyJobs(h.deps);
     await processOutbox(h.deps);
     const stuckFrom = h.clock.now().getTime() + 2 * 60_000; // Level 1 second attempt falls due at 2 min and nothing creates it
     let alertAt: number | null = null;
     for (let i = 1; i <= 10 && alertAt === null; i++) {
       h.clock.advance(60_000);
       await processDueJobs(h.deps);
+      await processClassifyJobs(h.deps);
       await processOutbox(h.deps);
       await mon.cycle();
       if (mon.alerts.length) alertAt = h.clock.now().getTime();

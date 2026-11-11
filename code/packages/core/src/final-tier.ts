@@ -24,6 +24,19 @@ export interface FinalTier {
   uncertaintyReasons: string[];
 }
 
+/**
+ * Strict check of a model answer (B1-001, B1-006): a known lower-case tier and a finite confidence in [0, 1].
+ * Anything else is `malformed`, which ends `uncertain` (UR-3).
+ */
+export function validateModelAnswer(a: { tier?: unknown; confidence?: unknown } | null | undefined): ModelOutcome {
+  if (!a || typeof a !== 'object') return { status: 'malformed' };
+  const tier = a.tier;
+  const c = a.confidence;
+  if (typeof tier !== 'string' || !(['life_safety', 'urgent', 'uncertain', 'routine'] as const).includes(tier as Tier)) return { status: 'malformed' };
+  if (typeof c !== 'number' || !Number.isFinite(c) || c < 0 || c > 1) return { status: 'malformed' };
+  return { status: 'ok', tier: tier as Tier, confidence: c };
+}
+
 export function finalTier(input: FinalTierInput): FinalTier {
   const reasons: string[] = [];
   if (input.ruleUncertainty) reasons.push('unusable_text');
@@ -31,6 +44,7 @@ export function finalTier(input: FinalTierInput): FinalTier {
   const m = input.model;
   if (m === null) reasons.push('no_model_result');
   else if (m.status !== 'ok') reasons.push(`model_${m.status}`);
+  else if (!Number.isFinite(m.confidence) || m.confidence < 0 || m.confidence > 1) reasons.push('model_malformed');
   else if (!(m.confidence >= MODEL_CONFIDENCE_THRESHOLD)) {
     reasons.push('low_confidence');
     modelTier = m.tier === 'routine' ? null : m.tier; // a confident-enough raise still counts; a weak routine does not

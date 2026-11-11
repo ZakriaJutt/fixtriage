@@ -9,3 +9,4 @@ export * from './keywords';
 export * from './templates';
 export * from './rules/lexicon-v1';
 export * from './rules/engine';
+export * from './rules/lexicon-v2';

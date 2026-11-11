@@ -299,7 +299,8 @@ export const channels = pgTable(
   },
   (t) => [
     unique('channels_account_id_id_uq').on(t.accountId, t.id),
-    uniqueIndex('channels_address_uq').on(t.address),
+    // B1-004: one address resolves to one account, compared case-insensitively (email local parts and domains).
+    uniqueIndex('channels_address_lower_uq').on(sql`lower(${t.address})`),
     oneOf('channels_kind_values', t.kind, ['sms', 'email']),
     isolation('channels'),
   ],
@@ -791,6 +792,31 @@ export const pendingStatusEvents = pgTable(
   ],
 );
 
+/**
+ * B1-004: a message whose destination resolves to no channel. Global (no account is known), metadata only: no
+ * sender, no text (the provider keeps the message; the operator fetches it by ID). An uncleared row fails /readyz,
+ * so the external monitor alerts both operators.
+ */
+export const unroutedInbound = pgTable(
+  'unrouted_inbound',
+  {
+    id: pk(),
+    createdAt: createdAt(),
+    provider: text('provider').notNull(),
+    kind: text('kind').notNull(),
+    providerMessageId: text('provider_message_id').notNull(),
+    toAddress: text('to_address').notNull(),
+    receivedAt: ts('received_at').notNull(),
+    clearedAt: ts('cleared_at'),
+    clearedByOperatorId: uuid('cleared_by_operator_id').references(() => operators.id),
+  },
+  (t) => [
+    uniqueIndex('unrouted_inbound_provider_id_uq').on(t.provider, t.providerMessageId),
+    oneOf('unrouted_inbound_kind_values', t.kind, ['sms', 'email']),
+    index('unrouted_inbound_open_idx').on(t.receivedAt).where(sql`cleared_at is null`),
+  ],
+);
+
 /** Account-owned tables: each has account_id, RLS enabled and forced, and a case in IT-10. */
 export const ACCOUNT_TABLES = [
   'accounts', 'users', 'properties', 'units', 'tenant_contacts', 'vendors', 'vendor_trades', 'oncall_shifts', 'channels',
@@ -798,12 +824,12 @@ export const ACCOUNT_TABLES = [
   'escalations', 'escalation_steps', 'capability_tokens', 'audit_events', 'jobs', 'idempotency_keys',
 ] as const;
 
-export const GLOBAL_TABLES = ['operators', 'sessions', 'rule_sets', 'probe_runs', 'pending_status_events'] as const;
+export const GLOBAL_TABLES = ['operators', 'sessions', 'rule_sets', 'probe_runs', 'pending_status_events', 'unrouted_inbound'] as const;
 
 /** Objects created by migrations/0001 that Drizzle cannot express; checked by the ORM-diff test (IT-14). */
 export const CUSTOM_OBJECTS = {
   constraints: ['oncall_shifts_no_overlap'],
-  triggers: ['requests_tier_guard', 'incidents_tier_guard', 'audit_events_no_change'],
+  triggers: ['requests_tier_guard', 'incidents_tier_guard', 'audit_events_no_change', 'accounts_validate'],
   functions: ['resolve_channel', 'resolve_session', 'resolve_login', 'resolve_capability', 'resolve_outbound'],
-  views: ['due_escalations', 'pending_outbox', 'due_dispatches', 'sweep_accounts', 'due_jobs'],
+  views: ['due_escalations', 'pending_outbox', 'due_dispatches', 'sweep_accounts', 'due_jobs', 'due_undecided', 'job_health'],
 } as const;

@@ -4,7 +4,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { createDatabase, ownerUrl, appUrl, withAccount, tables, type Database } from '@fixtriage/db';
 import { FakeClassifier, FakeClock, FakeMessagingProvider, FakeObjectStorage, sha256, twilioSignature } from '@fixtriage/platform';
-import { processDueJobs, processOutbox, retryPendingStatusEvents, tickEscalations, watchDispatches, type Deps } from '@fixtriage/services';
+import { processClassifyJobs, processDueJobs, processOutbox, retryPendingStatusEvents, sweepUndecided, tickEscalations, watchDispatches, type Deps } from '@fixtriage/services';
 import { createHandlers, route, SESSION_COOKIE, CSRF_HEADER, type WebDeps } from '../apps/web/src/handlers';
 
 export const BASE_URL = 'https://app.fixtriage.example';
@@ -192,7 +192,8 @@ export async function sms(h: Harness, s: Seeded, from: string, body: string | nu
 export async function drain(deps: Deps, opts: { jobs?: boolean; outbox?: boolean } = {}): Promise<void> {
   for (let i = 0; i < 20; i++) {
     let n = 0;
-    if (opts.jobs !== false) n += await processDueJobs(deps);
+    if (opts.jobs !== false) n += (await processDueJobs(deps)) + (await processClassifyJobs(deps));
+    n += await sweepUndecided(deps);
     n += await tickEscalations(deps);
     n += await watchDispatches(deps);
     if (opts.outbox !== false) n += await processOutbox(deps);

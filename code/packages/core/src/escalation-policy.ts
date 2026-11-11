@@ -20,6 +20,8 @@ export const EP = {
   outcomeReminderSeconds: 1800,
   /** EP-11a: reopen when no outcome 45 minutes after acknowledgement. */
   outcomeReopenSeconds: 2700,
+  /** B1-001 [P]: a request with no decision 30 s after receipt (classify budget 20 s + margin) becomes `uncertain` (UR-3). Mirrored in view `due_undecided`. */
+  decisionDeadlineSeconds: 30,
   /** EP-8: business-hours `uncertain` pages Level 1 if not triaged in 15 minutes. */
   uncertainTriageSeconds: 900,
   /** FD-3: emergency dispatch confirmation within 10 minutes. */

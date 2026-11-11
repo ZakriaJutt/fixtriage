@@ -245,6 +245,22 @@ export const EMERGENCY_SET: EmergencyItem[] = [
     'heating has stopped',
   ]),
   ...make('more-lockout', 'urgent', ['locked out again sorry', 'cant get in, lost keys', 'key snapped in the door'], { afterHours: true }),
+  // B1 fix round 1 (B1-003): the reviewer's 34 after-hours phrasings plus further negations and short-word misspellings.
+  ...make('review-a1-ls', 'life_safety', [
+    'smells like propane', 'CO detector going off', 'carbon monoxide alarm beeping', 'outlet sparking', 'theres a fire', 'smoke in the hallway',
+    'gass smell', 'water leaking into the electrical panel', 'my neighbour fell and cant get up',
+    'Gas smel', 'i smel gass', 'GASS LEAK', 'gaz leak in kitchen', 'smoek everywhere', 'my mom fell down the stairs', 'he passed out', 'cant breathe smoke',
+  ], { afterHours: true }),
+  ...make('review-a1-urgent', 'urgent', [
+    'water pouring through the ceiling light', 'furnace died and its freezing in here', 'heater not working', 'my heat doesnt work', 'heat is off',
+    'no heating at all', 'toilet overflowing everywhere', 'toilet is the only one and its clogged', 'power is out in the whole unit', 'locked out',
+    'lost my keys cant get in', 'front door lock broken cant lock it', 'sewage coming up the drain', 'pipe burst', 'ceiling collapsed', 'basement is flooded',
+    'flodding in kitchen', 'no water', 'window smashed cant secure unit', 'hot water tank burst', 'water heater leaking everywhere',
+    'breaker keeps tripping no power', 'radiator not working', 'NO HEAT!!!', 'no heat 🥶',
+    "my heat doesn't work", 'my heat does not work', 'the heater isnt working', 'furnace wont turn on', 'furnace won t start', 'heating doesn t work',
+    'power doesnt work', 'electricity is not working', 'boiler isnt working', 'thermostat doesnt work no heat', 'back door wont lock', 'balcony door cant lock',
+    'water is coming in under the door', 'leaking badly from upstairs', "the heat won't come on", 'Heat Doesnt Work!!', 'our heater died',
+  ], { afterHours: true }),
   ...make('mixed-urgent', 'urgent', [
     'leak in ceiling and no heat',
     'no power and no water',

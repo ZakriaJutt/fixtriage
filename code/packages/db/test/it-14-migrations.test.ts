@@ -7,6 +7,7 @@ import { checkJournalOrder, migrate, ormDiff } from '@fixtriage/db/migrate';
 import { seedRuleSets } from '@fixtriage/services';
 
 const url = ownerUrl('test');
+const ALL = ['0000_tables', '0001_rls_functions_views_grants', '0002_unrouted_inbound', '0003_fix_round1'];
 
 describe('IT-14 migrations', () => {
   it('migrates an empty database cleanly with an empty ORM diff, and a second run applies nothing', async () => {
@@ -15,11 +16,11 @@ describe('IT-14 migrations', () => {
     await c.query(`drop schema public cascade; create schema public; grant usage on schema public to ${APP_ROLE}`);
     await c.end();
     const first = await migrate(url);
-    expect(first.applied).toEqual(['0000_tables', '0001_rls_functions_views_grants']);
+    expect(first.applied).toEqual(ALL);
     await seedRuleSets(url);
     expect(await ormDiff(url)).toEqual([]);
     const second = await migrate(url);
-    expect(second).toEqual({ applied: [], skipped: ['0000_tables', '0001_rls_functions_views_grants'] });
+    expect(second).toEqual({ applied: [], skipped: ALL });
   });
   it('refuses to continue when an applied migration file was edited', async () => {
     const c = new pg.Client({ connectionString: url });

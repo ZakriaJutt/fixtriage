@@ -11,13 +11,13 @@ import {
   renderPurposeNotice,
   renderSafetyReply,
   ruleFloor,
-  RULES_V1,
+  CURRENT_RULES,
   suggestsDuplicate,
   tierRank,
   type Tier,
 } from '@fixtriage/core';
 import { and, eq, inArray, resolvers, sql, tables, type Tx } from '@fixtriage/db';
-import { publicUrl } from '@fixtriage/platform';
+import { newCorrelationId, publicUrl } from '@fixtriage/platform';
 import { advisoryLock, afterHours, audit, enqueueJob, loadAccount, serviceLog, withAccount, type Deps } from './context';
 import { handleVendorReply } from './dispatch';
 import { paging, reopenEscalation, startEscalation, type Trigger } from './escalation';
@@ -44,9 +44,16 @@ export type IngestResult = { status: 'stored'; accountId: string; inboundId: str
  * enqueue the intake job. No model and no classification queue is involved in the safety reply (MH-02).
  */
 export async function ingestInbound(deps: Deps, m: InboundInput): Promise<IngestResult> {
+  // A malformed correlation ID must never cost the message (it is our own tracing value, replaced if invalid).
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(m.correlationId)) m = { ...m, correlationId: newCorrelationId() };
   const ch = await resolvers.channel(deps.database, m.to);
   if (!ch) {
-    // Gap: schema.md has no table for messages to an unknown destination (recorded in the B1 verification section).
+    // B1-004: never dropped. Metadata only (no sender, no text) in a global table; an uncleared row fails /readyz so
+    // the external monitor alerts both operators. The provider keeps the message for retrieval by its ID.
+    await deps.database.pool.query(
+      'insert into unrouted_inbound (provider, kind, provider_message_id, to_address, received_at) values ($1, $2, $3, $4, $5) on conflict (provider, provider_message_id) do nothing',
+      [m.provider, m.kind, m.providerMessageId, m.to, m.receivedAt],
+    );
     serviceLog.error('inbound.unrouted_destination', { provider: m.provider });
     return { status: 'unrouted' };
   }
@@ -124,7 +131,7 @@ export async function ingestInbound(deps: Deps, m: InboundInput): Promise<Ingest
   });
 }
 
-const hazardOf = (ruleId: string | null) => RULES_V1.find((r) => r.id === ruleId)?.hazardClass ?? 'unknown';
+const hazardOf = (ruleId: string | null) => CURRENT_RULES.find((r) => r.id === ruleId)?.hazardClass ?? 'unknown';
 
 type RequestRow = typeof tables.requests.$inferSelect;
 
@@ -211,10 +218,8 @@ export async function processIntake(tx: Tx, deps: Deps, accountId: string, inbou
 export async function applyEscalationNeed(tx: Tx, deps: Deps, accountId: string, request: RequestRow, hazardClass: string, receivedAt: Date): Promise<void> {
   const need = escalationNeed(request);
   if (need === 'none') return;
-  if (need === 'triage_timer' && !request.incidentId) {
-    await enqueueJob(tx, accountId, 'triage.timeout', { requestId: request.id }, `triage:${request.id}`, new Date(request.openedAt.getTime() + EP.uncertainTriageSeconds * 1000));
-    return;
-  }
+  // EP-8 business-hours timer: the deterministic sweep over view `due_undecided` pages at 15 min (B1-001).
+  if (need === 'triage_timer' && !request.incidentId) return;
   await ensureIncident(tx, deps, accountId, request, hazardClass, receivedAt, 'new_incident');
 }
 

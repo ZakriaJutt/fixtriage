@@ -1,6 +1,7 @@
 // /readyz (TRD 5.1, 8.9): database, queue, storage, and the age of the oldest due escalation step, outbox row,
 // dispatch check and job. Fails above 60 s so a running but stuck worker is visible to the external monitor.
-import { oldestDue } from '@fixtriage/db';
+import { healthCounts, oldestDue } from '@fixtriage/db';
+import { checkTimezoneData } from '@fixtriage/platform';
 import type { Deps } from './context';
 
 export const READY_MAX_AGE_SECONDS = 60;
@@ -27,9 +28,14 @@ export async function readiness(deps: Pick<Deps, 'database' | 'clock' | 'storage
     const last = p.rows[0] as { sent_at: Date; received_at: Date | null; ok: boolean | null } | undefined;
     const probeFailed = !!last && (last.ok === false || (last.received_at === null && now.getTime() - new Date(last.sent_at).getTime() > 5 * 60_000));
     checks.probe = { ok: !probeFailed };
+    // B1-001: a dead job means some request may never be processed; B1-004: an unrouted message awaits an operator.
+    const hc = await healthCounts(deps.database);
+    checks.dead_jobs = { ok: hc.deadJobs === 0 };
+    checks.unrouted_inbound = { ok: hc.unrouted === 0 };
   } catch {
     checks.database = { ok: false };
   }
+  checks.tzdata = { ok: checkTimezoneData().ok }; // B1-008
   try {
     checks.storage = { ok: await deps.storage.ping() };
   } catch {

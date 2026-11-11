@@ -1,5 +1,5 @@
 // classify job (TRD 6.3, 8.5; UR-3, UR-5; IT-03, IT-04). The model proposes; it can raise a tier, never lower a decided one.
-import { finalTier, isTier, tierRank, type ModelOutcome, type Tier } from '@fixtriage/core';
+import { finalTier, tierRank, validateModelAnswer, type ModelOutcome, type Tier } from '@fixtriage/core';
 import { and, eq, sql, tables } from '@fixtriage/db';
 import type { ClassifierAnswer } from '@fixtriage/platform';
 import { audit, serviceLog, withAccount, type Deps } from './context';
@@ -18,9 +18,15 @@ async function callModel(deps: Deps, text: string | null, hasMedia: boolean): Pr
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), Math.min(deps.classifyTimeoutMs ?? CLASSIFY_CALL_TIMEOUT_MS, remaining));
     try {
-      const a = await deps.classifier.classify({ text, hasMedia }, ctl.signal);
-      if (!isTier(a.tier) || typeof a.confidence !== 'number') return { outcome: { status: 'malformed' }, answer: null, status: 'failed' };
-      return { outcome: { status: 'ok', tier: a.tier, confidence: a.confidence }, answer: a, status: 'ok' };
+      // B1-002: the worker enforces the timeout itself; a client that ignores the abort signal cannot hold the job.
+      let hardTimer: NodeJS.Timeout | undefined;
+      const a = await Promise.race([
+        deps.classifier.classify({ text, hasMedia }, ctl.signal),
+        new Promise<never>((_, rej) => (hardTimer = setTimeout(() => { ctl.abort(); rej(new Error('hard timeout')); }, Math.min(deps.classifyTimeoutMs ?? CLASSIFY_CALL_TIMEOUT_MS, remaining)))),
+      ]).finally(() => clearTimeout(hardTimer));
+      const v = validateModelAnswer(a);
+      if (v.status !== 'ok') return { outcome: v, answer: null, status: 'failed' };
+      return { outcome: v, answer: a, status: 'ok' };
     } catch {
       last = ctl.signal.aborted ? 'timeout' : 'failed';
     } finally {
@@ -54,7 +60,7 @@ export async function runClassifyJob(deps: Deps, accountId: string, inboundId: s
         promptVersion: deps.classifier.promptVersion,
         proposedTier: res.answer?.tier ?? null,
         proposedTrade: res.answer?.trade ?? null,
-        confidence: res.answer ? res.answer.confidence.toFixed(3) : null,
+        confidence: res.answer ? res.answer.confidence.toFixed(3) : null, // validated finite in [0, 1]
         missingFields: res.answer?.missingFields ?? null,
         status: res.status,
         createdAt: now,

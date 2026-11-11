@@ -9,3 +9,4 @@ export * from './providers/messaging';
 export * from './providers/classifier';
 export * from './providers/storage';
 export * from './providers/monitor';
+export * from './tzdata';

@@ -106,20 +106,25 @@ describe('IT-10 cross-account isolation', () => {
       pending_outbox: ['id', 'account_id', 'created_at', 'next_attempt_at'],
       due_dispatches: ['id', 'account_id', 'confirm_due_at'],
       sweep_accounts: ['id', 'status'],
-      due_jobs: ['id', 'account_id', 'run_at'],
+      due_jobs: ['id', 'account_id', 'run_at', 'kind'],
+      due_undecided: ['id', 'account_id', 'due_at'],
+      job_health: ['dead_jobs'],
     };
     for (const [v, cols] of Object.entries(views)) {
       const r = await owner((c) => c.query(`select column_name from information_schema.columns where table_name = $1 order by ordinal_position`, [v]));
       expect([v, r.rows.map((x) => x.column_name)]).toEqual([v, cols]);
     }
     const db = appDb();
-    const crafted = ["' or 1=1 --", '%', A.smsNumber + ' ', ''];
+    const crafted = ["' or 1=1 --", '%', '_', A.smsNumber + '0', ''];
     for (const x of crafted) {
       expect((await db.pool.query('select * from resolve_channel($1)', [x])).rowCount).toBe(0);
       expect((await db.pool.query('select * from resolve_outbound($1)', [x])).rowCount).toBe(0);
       expect((await db.pool.query('select * from resolve_login($1)', [x])).rowCount).toBe(0);
     }
     expect((await db.pool.query('select * from resolve_session($1)', [randomBytes(32)])).rowCount).toBe(0);
+    // B1-004: addresses compare case-insensitively and ignore surrounding blanks, and still resolve to the right account only
+    const up = await db.pool.query('select account_id from resolve_channel($1)', [` ${A.emailAddress.toUpperCase()} `]);
+    expect(up.rows).toEqual([{ account_id: A.accountId }]);
     expect((await db.pool.query('select * from resolve_capability($1)', [randomBytes(32)])).rowCount).toBe(0);
   });
   it('storage keys start with the account id (AD-10); B1 has no storage read path to test', () => {

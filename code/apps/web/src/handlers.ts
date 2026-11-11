@@ -116,6 +116,8 @@ export function createHandlers(deps: WebDeps): Record<string, Handler> {
         body: params.Body ?? null, mediaCount: Math.min(Number(params.NumMedia ?? 0) || 0, 10), receivedAt: deps.clock.now(), correlationId: cid, raw: params,
       });
       log.info('twilio.sms', { status: r.status });
+      // Twilio does not retry an inbound SMS webhook on error, so 200 is returned in every case; an unrouted message
+      // was recorded in unrouted_inbound and fails /readyz (B1-004).
       return xml(''); // 200 with empty TwiML: no reply from the webhook itself; the safety reply goes through the outbox
     }),
 
@@ -170,6 +172,9 @@ export function createHandlers(deps: WebDeps): Record<string, Handler> {
       if (!id || !from || !to) return error(400, 'invalid_payload', cid);
       const atts = Array.isArray(b?.Attachments) ? b!.Attachments.length : 0;
       const r = await ingestInbound(deps, { provider: 'postmark', kind: 'email', providerMessageId: id, to, from, body: typeof b?.TextBody === 'string' ? b.TextBody : null, mediaCount: Math.min(atts, 10), receivedAt: deps.clock.now(), correlationId: cid });
+      // B1-004: Postmark retries an inbound webhook that does not answer 200 (and stops on 403), so an unrouted message
+      // is answered 503 after it was recorded: the message stays retrievable while the operator fixes the routing.
+      if (r.status === 'unrouted') return error(503, 'unrouted_destination', cid);
       return json(200, { status: r.status });
     }),
 

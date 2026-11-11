@@ -23,4 +23,9 @@ describe('UT-06 duplicate matching', () => {
     expect(du4Decision({ ...base, buildingWide: true, newUnitId: 'u406' })).toBe('attach_building_wide');
     expect(du4Decision({ ...base, buildingWide: true, newUnitId: 'u406', newTier: 'life_safety' })).toBe('reopen');
   });
+  it('B1-005: a life_safety report reopens even on a building-wide life_safety incident and from the same unit', () => {
+    expect(du4Decision({ ...base, incidentTier: 'life_safety', buildingWide: true, newUnitId: 'u305', newTier: 'life_safety' })).toBe('reopen');
+    expect(du4Decision({ ...base, incidentTier: 'life_safety', newUnitId: 'u204', newTier: 'life_safety' })).toBe('reopen');
+    expect(du4Decision({ ...base, incidentTier: 'life_safety', buildingWide: true, newUnitId: 'u305', newTier: 'urgent' })).toBe('attach_building_wide');
+  });
 });

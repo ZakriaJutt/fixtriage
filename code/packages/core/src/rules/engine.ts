@@ -1,8 +1,11 @@
 // Deterministic rule engine (MH-03, UR-1..UR-3, UR-7). Pure: no I/O, no clock.
 import { maxTier, tierRank, type Tier } from '../tiers';
-import { ENGLISH_VOCAB, RULES_V1, type HazardClass, type Phrase, type Rule } from './lexicon-v1';
+import { ENGLISH_VOCAB, type HazardClass, type Phrase, type Rule } from './lexicon-v1';
+import { RULES_V2 } from './lexicon-v2';
 
-export const RULE_SET_VERSION = 1;
+/** Current rule set. v1 is kept for the decisions stored with it; v2 adds B1-003 phrasings and the v2 normaliser. */
+export const RULE_SET_VERSION = 2;
+export const CURRENT_RULES: Rule[] = RULES_V2;
 
 export interface RuleInput {
   text: string | null;
@@ -23,7 +26,16 @@ export interface RuleResult {
   hazardClass: HazardClass;
 }
 
-const SUBSTITUTIONS: Record<string, string> = { thru: 'through', smth: 'something', u: 'you', ur: 'your', r: 'are', cuz: 'because', bc: 'because', '2nite': 'tonight', w: 'with' };
+const SUBSTITUTIONS: Record<string, string> = {
+  thru: 'through', smth: 'something', u: 'you', ur: 'your', r: 'are', cuz: 'because', bc: 'because', '2nite': 'tonight', w: 'with',
+  // v2: short words that fuzzy matching (6+ letters) cannot reach, and contractions typed without apostrophes or spaces
+  gass: 'gas', gaz: 'gas', gsa: 'gas', smel: 'smell', smelll: 'smell', heet: 'heat', haet: 'heat', hete: 'heat', heats: 'heat', fyre: 'fire', fier: 'fire', smok: 'smoke', smoek: 'smoke', somke: 'smoke', smkoe: 'smoke',
+  flod: 'flood', flud: 'flood', leek: 'leak', leeking: 'leaking', watr: 'water', wtr: 'water', powr: 'power', noheat: 'no heat',
+  doesn: 'doesnt', dosent: 'doesnt', doesent: 'doesnt', dosnt: 'doesnt', dont: 'dont', isn: 'isnt', wont: 'wont', cannot: 'cant', cnt: 'cant', cant: 'cant', aint: 'aint',
+};
+const CONTRACTIONS = new Set(['doesnt', 'dont', 'isnt', 'wont', 'cant', 'didnt', 'aint']);
+/** v2: two-word negations also yield the one-token form so that "does not work" and "doesnt work" match the same phrase. */
+const PAIRS: Record<string, string> = { 'does not': 'doesnt', 'do not': 'dont', 'is not': 'isnt', 'will not': 'wont', 'can not': 'cant', 'did not': 'didnt', 'are not': 'isnt', 'has not': 'isnt', 'won t': 'wont', 'can t': 'cant', 'don t': 'dont', 'isn t': 'isnt', 'didn t': 'didnt' };
 
 export function normalise(text: string): string[] {
   const lowered = text
@@ -34,7 +46,18 @@ export function normalise(text: string): string[] {
   return lowered
     .split(/[^\p{L}\p{N}]+/u)
     .filter((t) => t.length > 0)
-    .map((t) => SUBSTITUTIONS[t] ?? t);
+    .flatMap((t) => (SUBSTITUTIONS[t] ?? t).split(' '))
+    .reduce<string[]>((acc, t) => {
+      // Both spellings of a negation are kept: "does not" also yields "doesnt", "doesnt" also yields "not".
+      const prev = acc[acc.length - 1];
+      const pair = prev !== undefined ? PAIRS[`${prev} ${t}`] : undefined;
+      acc.push(t);
+      if (pair) acc.push(pair);
+      else if (CONTRACTIONS.has(t)) acc.push('not');
+      return acc;
+    }, [])
+    // "doesn t" (apostrophe replaced by a space): drop the stray t after a contraction stem
+    .filter((t, i, arr) => !(t === 't' && i > 1 && arr[i - 1] === 'not' && CONTRACTIONS.has(arr[i - 2]!)));
 }
 
 /** Damerau-Levenshtein (optimal string alignment) distance, early exit above `max`. */
@@ -94,7 +117,7 @@ function phraseMatches(p: Phrase, tokens: string[]): boolean {
 }
 
 const VOCAB = new Set<string>(ENGLISH_VOCAB);
-for (const r of RULES_V1) for (const p of r.phrases) for (const t of p.tokens) if (!t.endsWith('*')) VOCAB.add(t);
+for (const r of RULES_V2) for (const p of r.phrases) for (const t of p.tokens) if (!t.endsWith('*')) VOCAB.add(t);
 
 function isLexiconLanguage(text: string, tokens: string[]): boolean {
   // Any letter outside the Latin script means the text is outside the lexicon's language.
@@ -105,7 +128,7 @@ function isLexiconLanguage(text: string, tokens: string[]): boolean {
   return known / words.length >= 1 / 3;
 }
 
-export function evaluateRules(input: RuleInput, rules: Rule[] = RULES_V1): RuleResult {
+export function evaluateRules(input: RuleInput, rules: Rule[] = CURRENT_RULES): RuleResult {
   const text = (input.text ?? '').trim();
   const tokens = normalise(text);
   const matched: Rule[] = [];

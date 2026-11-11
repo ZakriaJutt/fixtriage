@@ -1,6 +1,6 @@
 // Process-wide wiring for the Next.js deployable: configuration, database, providers (fakes in B1), check-in.
 import { createDatabase } from '@fixtriage/db';
-import { FakeClassifier, FakeMessagingProvider, FakeObjectStorage, HttpMonitorClient, loadConfig, systemClock } from '@fixtriage/platform';
+import { checkTimezoneData, FakeClassifier, FakeMessagingProvider, FakeObjectStorage, HttpMonitorClient, loadConfig, systemClock } from '@fixtriage/platform';
 import { createHandlers, route } from './handlers';
 
 let handlers: ReturnType<typeof createHandlers> | null = null;
@@ -8,6 +8,8 @@ let handlers: ReturnType<typeof createHandlers> | null = null;
 export function getHandlers(): ReturnType<typeof createHandlers> {
   if (handlers) return handlers;
   const c = loadConfig();
+  const tz = checkTimezoneData(); // B1-008; /readyz also reports it
+  if (!tz.ok) throw new Error(`tzdata check failed: ${tz.reason}`);
   handlers = createHandlers({
     database: createDatabase(c.DATABASE_URL),
     clock: systemClock,

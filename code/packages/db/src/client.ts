@@ -54,12 +54,36 @@ export const resolvers = {
   },
 };
 
-export type PollView = 'due_escalations' | 'pending_outbox' | 'due_dispatches' | 'due_jobs';
+export type PollView = 'due_escalations' | 'pending_outbox' | 'due_dispatches' | 'due_jobs' | 'due_undecided';
 
-/** Worker polls (schema.md 4). Returns id, account_id and the due column, oldest first. */
-export async function poll(database: Database, view: PollView, dueBefore: Date, limit = 100): Promise<Array<{ id: string; account_id: string; due: Date }>> {
-  const col = { due_escalations: 'next_due_at', pending_outbox: 'coalesce(next_attempt_at, created_at)', due_dispatches: 'confirm_due_at', due_jobs: 'run_at' }[view];
-  const r = await database.pool.query(`select id, account_id, ${col} as due from ${view} where ${col} <= $1 order by ${col} limit $2`, [dueBefore, limit]);
+const DUE_COL: Record<PollView, string> = {
+  due_escalations: 'next_due_at',
+  pending_outbox: 'coalesce(next_attempt_at, created_at)',
+  due_dispatches: 'confirm_due_at',
+  due_jobs: 'run_at',
+  due_undecided: 'due_at',
+};
+
+/** Worker polls (schema.md 4). Returns id, account_id and the due column, oldest first. `due_jobs` can filter by kind (B1-002). */
+export async function poll(
+  database: Database,
+  view: PollView,
+  dueBefore: Date,
+  limit = 100,
+  jobKinds?: { include?: string[]; exclude?: string[] },
+): Promise<Array<{ id: string; account_id: string; due: Date }>> {
+  const col = DUE_COL[view];
+  const params: unknown[] = [dueBefore, limit];
+  let extra = '';
+  if (view === 'due_jobs' && jobKinds?.include) {
+    params.push(jobKinds.include);
+    extra += ' and kind = any($' + params.length + ')';
+  }
+  if (view === 'due_jobs' && jobKinds?.exclude) {
+    params.push(jobKinds.exclude);
+    extra += ' and not (kind = any($' + params.length + '))';
+  }
+  const r = await database.pool.query(`select id, account_id, ${col} as due from ${view} where ${col} <= $1${extra} order by ${col} limit $2`, params);
   return r.rows;
 }
 
@@ -70,8 +94,17 @@ export async function oldestDue(database: Database, now: Date): Promise<Record<P
       (select min(next_due_at) from due_escalations where next_due_at <= $1) as due_escalations,
       (select min(coalesce(next_attempt_at, created_at)) from pending_outbox where coalesce(next_attempt_at, created_at) <= $1) as pending_outbox,
       (select min(confirm_due_at) from due_dispatches where confirm_due_at <= $1) as due_dispatches,
-      (select min(run_at) from due_jobs where run_at <= $1) as due_jobs`,
+      (select min(run_at) from due_jobs where run_at <= $1) as due_jobs,
+      (select min(due_at) from due_undecided where due_at <= $1) as due_undecided`,
     [now],
   );
   return r.rows[0];
+}
+
+/** Platform-level health counts for /readyz: dead jobs (B1-001) and uncleared unrouted messages (B1-004). No IDs. */
+export async function healthCounts(database: Database): Promise<{ deadJobs: number; unrouted: number }> {
+  const r = await database.pool.query(
+    'select (select dead_jobs from job_health) as dead, (select count(*)::int from unrouted_inbound where cleared_at is null) as unrouted',
+  );
+  return { deadJobs: Number(r.rows[0].dead), unrouted: Number(r.rows[0].unrouted) };
 }
