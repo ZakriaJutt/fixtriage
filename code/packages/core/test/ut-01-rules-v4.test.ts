@@ -1,7 +1,7 @@
 // Rule set v4 (B1-003 round-3 fix): the reviewer's nine misses, quieted false pages, the URGENT reply, frozen v3,
 // and the known limits measured on a small synthetic set (recorded in PRD SM-12 and verification section 7).
 import { describe, expect, it } from 'vitest';
-import { evaluateRules, intakeFloor, normalise, renderUrgentPrompt, RULE_SET_VERSION, SAFETY_CANDIDATE_V3, SAFETY_CANDIDATE_V4, safetyCandidate, URGENT_KEYWORD_LINE } from '../src';
+import { carrierKeyword, distressFloor, evaluateRules, intakeFloor, normalise, renderUrgentPrompt, RULE_SET_VERSION, SAFETY_CANDIDATE_V3, SAFETY_CANDIDATE_V4, safetyCandidate, URGENT_KEYWORD_LINE } from '../src';
 import { HOLDOUT_EMERGENCIES, HOLDOUT_ROUTINE, REVIEWER_R3_EMERGENCIES, REVIEWER_R3_ROUTINE } from './fixtures/holdout-set';
 
 const floor = (t: string, ah: boolean) => intakeFloor(evaluateRules({ text: t, hasMedia: false, afterHours: ah }), ah);
@@ -56,5 +56,17 @@ describe('EP-10a URGENT reply', () => {
     expect(p.body).toContain(URGENT_KEYWORD_LINE);
     expect(p.body).toContain('911');
     expect(p.body).toContain('+16045550100');
+  });
+});
+
+describe('B1-012 distress floor', () => {
+  it.each(['HELP', 'help', 'HELP!', 'HELP!!!', 'help.', 'Help me', 'please help', 'help help', 'SOS', 'INFO', 'someone help'])('"%s" has an uncertain floor', (t) => {
+    expect(distressFloor(t)).toBe('uncertain');
+  });
+  it.each(['the blinds are broken', 'can you help with my lease', 'STOP', 'START', '', null])('"%s" has none', (t) => expect(distressFloor(t)).toBeNull());
+  it('HELP and INFO are still recognised as carrier keywords (stored), STOP is the only one that consumes', () => {
+    expect(carrierKeyword('HELP!')).toBe('help');
+    expect(carrierKeyword('info')).toBe('help');
+    expect(carrierKeyword('STOP')).toBe('stop');
   });
 });

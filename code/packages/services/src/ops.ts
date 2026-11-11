@@ -64,7 +64,7 @@ export async function actOnDeadJob(deps: Deps, op: OperatorPrincipal, input: { j
       if ((j.kind === 'intake.process' || j.kind === 'classify') && inboundId) {
         materialised = await materialiseRequest(tx, deps, accountId, inboundId);
         const [left] = await tx.select({ requestId: tables.inboundMessages.requestId, keyword: tables.inboundMessages.keyword, handledAs: tables.inboundMessages.handledAs }).from(tables.inboundMessages).where(eq(tables.inboundMessages.id, inboundId));
-        if (left && !left.requestId && !left.keyword && !left.handledAs) throw new ConflictError('inbound_without_request');
+        if (left && !left.requestId && left.keyword !== 'stop' && !left.handledAs) throw new ConflictError('inbound_without_request');
       }
     }
     const upd = await tx

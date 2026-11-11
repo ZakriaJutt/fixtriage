@@ -27,3 +27,15 @@ export function vendorReply(text: string | null): VendorReply {
   if (/^(no|n|decline|declined|cant|can't|cannot|not available)\b/.test(b)) return 'declined';
   return null;
 }
+
+/**
+ * B1-012 (round 4 ruling): a message that is only a call for help (HELP, INFO, "help me", "please help", SOS) is never
+ * consumed as a carrier keyword: it goes through intake with at least an `uncertain` floor, so after hours it pages at
+ * once and in business hours the EP-8 timer applies. The provider may still send its own HELP reply. Pure.
+ */
+const DISTRESS = /^(?:(?:please|pls|plz|someone|somebody|can someone|i need)\s+)?(?:help|sos|info)(?:\s+(?:me|us|please|pls|plz|now|asap|help|sos))*$/;
+
+export function distressFloor(text: string | null): 'uncertain' | null {
+  const b = (text ?? '').trim().toLowerCase().replace(/[^a-z\s]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return b.length > 0 && DISTRESS.test(b) ? 'uncertain' : null;
+}

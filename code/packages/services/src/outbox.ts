@@ -1,11 +1,12 @@
 // Single outbox with delivery tracking (AD-12, FD-2, TRD 6.3; IT-09, IT-13).
 import { createHash } from 'node:crypto';
-import { applyStatus, isFailure, STATUS_RANK, type OutboundStatus, type Rendered } from '@fixtriage/core';
+import { applyStatus, isFailure, STATUS_RANK, tierRank, type OutboundStatus, type Rendered, type Tier } from '@fixtriage/core';
 import { and, eq, poll, resolvers, sql, tables, type Tx } from '@fixtriage/db';
 import { ProviderRejectedError, ProviderTimeoutError, publicUrl, withCorrelation, type Channel } from '@fixtriage/platform';
 import { audit, correlationId, serviceLog, withAccount, type Deps } from './context';
 import { onPageChannelFailed } from './escalation';
 import { onDispatchFailed } from './dispatch';
+import { ensureIncident, materialiseRequest } from './intake';
 
 export type Purpose = 'safety_reply' | 'urgent_prompt' | 'notice' | 'tenant_update' | 'follow_up' | 'page_sms' | 'page_voice' | 'dispatch' | 'digest' | 'test_page' | 'probe';
 
@@ -202,22 +203,55 @@ export async function onOutboundFailed(tx: Tx, deps: Deps, accountId: string, ou
     await onPageChannelFailed(tx, deps, accountId, m.escalationStepId);
   } else if (m.purpose === 'dispatch' && m.dispatchId) {
     await onDispatchFailed(tx, deps, accountId, m.dispatchId, 'undelivered');
-  } else if (TENANT_PURPOSES.includes(m.purpose as Purpose) && m.channel === 'sms' && m.requestId) {
-    // FD-5: fall back to email when an address is known; otherwise flag "tenant unreachable" for the manager.
-    const rows = await tx.execute(sql`
-      select tc.email from inbound_messages i join tenant_contacts tc on tc.id = i.tenant_contact_id
-      where i.request_id = ${m.requestId} and tc.email is not null and tc.deleted_at is null limit 1`);
-    const email = (rows.rows[0] as { email?: string } | undefined)?.email;
-    if (email) {
-      await enqueueOutbound(tx, {
-        accountId, purpose: m.purpose as Purpose, channel: 'email', to: email,
-        rendered: { templateId: m.templateId ?? 'unknown', templateVersion: m.templateVersion ?? 1, body: m.body },
-        dedupeKey: `${m.dedupeKey}:email`, at: now, requestId: m.requestId,
-      });
-    } else {
-      await audit(tx, { accountId, actorKind: 'system', action: 'tenant.unreachable', objectType: 'request', objectId: m.requestId }, now);
+  } else if (TENANT_PURPOSES.includes(m.purpose as Purpose)) {
+    // B1-003 round 4: the after-hours URGENT line (after-hours safety reply or tenant.urgent_prompt) is the net for
+    // what the rules miss; when it cannot reach the tenant the request is escalated, never left silent.
+    const net = carriesUrgentLine(m);
+    let requestId = m.requestId;
+    if (!requestId && net) requestId = (await materialiseRequest(tx, deps, accountId, net.inboundId)).requestId;
+    if (requestId && m.channel === 'sms') {
+      // FD-5: fall back to email when an address is known; otherwise flag "tenant unreachable" for the manager.
+      const rows = await tx.execute(sql`
+        select tc.email from inbound_messages i join tenant_contacts tc on tc.id = i.tenant_contact_id
+        where i.request_id = ${requestId} and tc.email is not null and tc.deleted_at is null limit 1`);
+      const email = (rows.rows[0] as { email?: string } | undefined)?.email;
+      if (email) {
+        await enqueueOutbound(tx, {
+          accountId, purpose: m.purpose as Purpose, channel: 'email', to: email,
+          rendered: { templateId: m.templateId ?? 'unknown', templateVersion: m.templateVersion ?? 1, body: m.body },
+          dedupeKey: `${m.dedupeKey}:email`, at: now, requestId,
+        });
+      } else {
+        await audit(tx, { accountId, actorKind: 'system', action: 'tenant.unreachable', objectType: 'request', objectId: requestId }, now);
+      }
     }
+    if (net && requestId) await escalateUndeliveredNet(tx, deps, accountId, requestId, m.id);
   }
+}
+
+/** The rows that carry the EP-10a URGENT line, with the inbound message they answer (dedupe key `safety:<id>` or `urgent_prompt:<id>`). */
+function carriesUrgentLine(m: { purpose: string; templateId: string | null; dedupeKey: string }): { inboundId: string } | null {
+  const hit = (m.purpose === 'urgent_prompt' || (m.purpose === 'safety_reply' && m.templateId === 'safety_reply.after_hours')) && /^(?:safety|urgent_prompt):([0-9a-f-]{36})(?::email)?$/.exec(m.dedupeKey);
+  return hit ? { inboundId: hit[1]! } : null;
+}
+
+/**
+ * EP-10a(b): the URGENT line failed definitively (provider error, invalid number, blocked). The tenant cannot reply
+ * URGENT, so the request is raised to at least `uncertain`, flagged cannot-text ("phone the tenant") and paged at once.
+ */
+async function escalateUndeliveredNet(tx: Tx, deps: Deps, accountId: string, requestId: string, outboundId: string): Promise<void> {
+  const now = deps.clock.now();
+  const [r] = await tx.select().from(tables.requests).where(eq(tables.requests.id, requestId));
+  if (!r || r.state === 'closed') return;
+  const raise = r.tierSource === 'pending' || tierRank(r.tier as Tier) < tierRank('uncertain');
+  const [u] = await tx
+    .update(tables.requests)
+    .set({ ...(raise ? { tier: 'uncertain', tierSource: 'uncertainty' } : {}), cannotText: true, updatedAt: now, version: sql`${tables.requests.version} + 1` })
+    .where(eq(tables.requests.id, requestId))
+    .returning();
+  await audit(tx, { accountId, actorKind: 'system', action: 'request.urgent_line_undelivered', objectType: 'request', objectId: requestId, after: { outbound_id: outboundId, raised: raise } }, now);
+  serviceLog.warn('request.urgent_line_undelivered', { request_id: requestId });
+  await ensureIncident(tx, deps, accountId, u!, 'unknown', r.openedAt, 'new_incident');
 }
 
 /** Delivery-status webhook (TRD 5.1): forward-only by rank; unknown provider IDs are stored and retried (IT-09). */

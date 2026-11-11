@@ -145,6 +145,14 @@ Round-3 fix (2026-11-11, review fixtriage-b1-round3.md), fixed after round-3 ret
 | `outbound_messages` | Purpose value `urgent_prompt` (PRD EP-10a fixed prompt, template `tenant.urgent_prompt`) | B1-003 round 3 |
 | `rule_sets` | Version 4 seeded (v1-v3 unchanged checksums; the definition stores the v4 safety-candidate configuration: stems, pairs, weak, context and quiet words); new decisions store `rule_set_version = 4` | B1-003 round 3 |
 
+Round-4 fix (2026-11-11, review fixtriage-b1-round4.md), fixed after round-4 retest, awaiting recheck (migration `0007_round4_b1_012`):
+
+| Object | Change | Finding |
+|---|---|---|
+| view `inbound_health` | Now excludes only `keyword = 'stop'` rows (HELP, INFO and START rows get a request); same columns | B1-012 |
+| `classifications` | Rule row `reason = 'help_keyword'` when the bare-HELP floor set `uncertain` | B1-012 |
+| `audit_events` | Action `request.urgent_line_undelivered` when the EP-10a line failed and the request was escalated | B1-003 round 4 |
+
 ## 4. Permissions, account boundary, uniqueness
 
 | Object | `owner` | `manager` | `operator` | `web` service role | `worker` service role |
@@ -175,7 +183,7 @@ Round-3 fix (2026-11-11, review fixtriage-b1-round3.md), fixed after round-3 ret
 | view `due_undecided` (B1-001) | decision sweep in the safety loop | `id`, `account_id`, `due_at` |
 | view `job_health` (B1-001) | `/readyz` | `dead_jobs` (a count) |
 | view `dead_jobs` (fix round 2) | operator routes `/ops/jobs/*` (role `operator`, audited) | `id`, `account_id`, `kind`, `attempts`, `last_error`, `created_at` |
-| view `inbound_health` (B1-011) | `/readyz` | `oldest_without_request` (a time), `without_request` (a count) |
+| view `inbound_health` (B1-011, B1-012) | `/readyz` | `oldest_without_request` (a time), `without_request` (a count) |
 
   None returns message text, names, phone numbers or addresses. Tables `operators`, `rule_sets`, `probe_runs` are global and hold no tenant data. IT-10 calls every function and view with crafted inputs and checks the column list.
 - Cross-account denial: a foreign-key lookup of another account's ID returns "not found"; composite foreign keys `(account_id, id)` on child tables prevent a row in one account from referencing a parent in another. References to `operators` (`escalation_steps.target_operator_id`, `escalations.operator_engaged_by`, `relayed_by_operator_id`, `sessions.operator_id`) are plain foreign keys because operators belong to no account.

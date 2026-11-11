@@ -86,6 +86,8 @@ Utilities index (B1, paths under `code/`):
 | Operator dead-job actions (fix round 2) | `packages/services/src/ops.ts` | `listDeadJobs`, `actOnDeadJob`, `authenticateOperator` |
 | Rule set v4 and safety-candidate configurations (round 3) | `packages/core/src/rules/lexicon-v4.ts`, `safety-candidate.ts` | `RULES_V4`, `SAFETY_CANDIDATE_V3`, `SAFETY_CANDIDATE_V4` |
 | After-hours URGENT prompt (PRD EP-10a) | `packages/core/src/templates.ts` | `renderUrgentPrompt`, `URGENT_KEYWORD_LINE` |
+| Bare-HELP floor (B1-012) | `packages/core/src/keywords.ts` | `distressFloor` |
+| Undelivered URGENT line escalation (EP-10a(b)) | `packages/services/src/outbox.ts` | `onOutboundFailed` |
 | Materialise a request from a stored message (B1-011) | `packages/services/src/intake.ts` | `materialiseRequest` |
 | tz database guard (B1-008) | `packages/platform/src/tzdata.ts` | `checkTimezoneData` |
 | Job runners: safety loop and model loop (B1-002) | `packages/services/src/jobs.ts` | `processDueJobs`, `processClassifyJobs` |

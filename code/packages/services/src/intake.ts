@@ -2,6 +2,7 @@
 import {
   appendsToOpenRequest,
   carrierKeyword,
+  distressFloor,
   du4Decision,
   EP,
   evaluateRules,
@@ -92,9 +93,12 @@ export async function ingestInbound(deps: Deps, m: InboundInput): Promise<Ingest
       // FD-7: the provider blocks texts after STOP and sends its own opt-out confirmation; we record and show it.
       if (contact) await tx.update(tables.tenantContacts).set({ smsOptedOutAt: keyword === 'stop' ? m.receivedAt : null, updatedAt: now }).where(eq(tables.tenantContacts.id, contact.id));
       await audit(tx, { accountId: ch.account_id, actorKind: 'tenant', action: keyword === 'stop' ? 'tenant.sms_opt_out' : 'tenant.sms_opt_in', objectType: 'inbound_message', objectId: inboundId }, now);
-      return { status: 'stored', accountId: ch.account_id, inboundId } as const;
+      // STOP and its variants keep the existing design (FD-7): recorded, no request. B1-012: every other keyword the
+      // provider intercepts (START, HELP, INFO) is recorded and then still goes through intake like any message.
+      if (keyword === 'stop') return { status: 'stored', accountId: ch.account_id, inboundId } as const;
     }
-    if (keyword === 'help') return { status: 'stored', accountId: ch.account_id, inboundId } as const; // provider answers HELP
+    // B1-012: HELP/INFO may get the provider's own reply, but is never consumed: intake runs and the floor is `uncertain`.
+    const distress = distressFloor(m.body);
 
     if (m.kind === 'sms' && (await handleVendorReply(tx, deps, ch.account_id, m.from, m.body, inboundId))) {
       await tx.update(tables.inboundMessages).set({ handledAs: 'vendor_reply' }).where(eq(tables.inboundMessages.id, inboundId));
@@ -117,7 +121,7 @@ export async function ingestInbound(deps: Deps, m: InboundInput): Promise<Ingest
     }
     const contacts = pickContacts(account, property);
     const target = m.kind === 'email' ? { channel: 'email' as const, to: m.from } : !optedOut ? { channel: 'sms' as const, to: m.from } : contact?.email ? { channel: 'email' as const, to: contact.email } : null;
-    if (ruleHit || recent.rows.length === 0) {
+    if (ruleHit || distress !== null || recent.rows.length === 0) {
       const rendered = renderSafetyReply({ afterHours: ah, ...contacts });
       if (target) {
         safetyReplyId = await enqueueOutbound(tx, { accountId: ch.account_id, purpose: 'safety_reply', channel: target.channel, to: target.to, rendered, dedupeKey: `safety:${inboundId}`, at: now });
@@ -132,7 +136,7 @@ export async function ingestInbound(deps: Deps, m: InboundInput): Promise<Ingest
     // message that does not page at once (no rule or candidate floor, sender textable) and did not just get the safety
     // reply, which carries the same line, gets the fixed URGENT prompt. No model; a reply URGENT is rule ur.tenant_urgent.
     let urgentPrompt = false;
-    if (ah && safetyReplyId === null && !optedOut && target && intakeFloor(rules, ah) === null) {
+    if (ah && safetyReplyId === null && !optedOut && target && intakeFloor(rules, ah) === null && distress === null) {
       await enqueueOutbound(tx, { accountId: ch.account_id, purpose: 'urgent_prompt', channel: target.channel, to: target.to, rendered: renderUrgentPrompt(contacts), dedupeKey: `urgent_prompt:${inboundId}`, at: now });
       urgentPrompt = true;
     }
@@ -158,13 +162,16 @@ export function escalationNeed(r: Pick<RequestRow, 'tier' | 'tierSource' | 'cann
 export async function processIntake(tx: Tx, deps: Deps, accountId: string, inboundId: string): Promise<void> {
   const now = deps.clock.now();
   const [msg] = await tx.select().from(tables.inboundMessages).where(eq(tables.inboundMessages.id, inboundId));
-  if (!msg || msg.requestId || msg.keyword) return;
+  if (!msg || msg.requestId || msg.keyword === 'stop') return;
   await advisoryLock(tx, `${accountId}:${msg.fromAddress}`);
   const account = await loadAccount(tx, accountId);
   const ah = afterHours(account, msg.receivedAt);
   const rules = evaluateRules({ text: msg.body, hasMedia: msg.mediaCount > 0, afterHours: ah });
   // Fix round 2: an after-hours safety candidate (stem/fuzzy layer) is at least `uncertain`, decided at intake.
-  const floor = intakeFloor(rules, ah);
+  // B1-012: a bare call for help (HELP, INFO, "help me") is at least `uncertain`.
+  const distress = distressFloor(msg.body);
+  const ruleOrCandidate = intakeFloor(rules, ah);
+  const floor: Tier | null = ruleOrCandidate !== null || distress !== null ? maxTier(ruleOrCandidate, distress) : null;
   const [chan] = await tx.select({ kind: tables.channels.kind }).from(tables.channels).where(eq(tables.channels.id, msg.channelId));
   const cannotText = chan?.kind === 'sms' && (await smsOptedOut(tx, msg.fromAddress, msg.receivedAt));
   const contact = msg.tenantContactId ? (await tx.select().from(tables.tenantContacts).where(eq(tables.tenantContacts.id, msg.tenantContactId)))[0] : undefined;
@@ -219,7 +226,7 @@ export async function processIntake(tx: Tx, deps: Deps, accountId: string, inbou
     matchedRule: rules.primaryRule,
     proposedTier: floor,
     status: 'ok',
-    reason: rules.uncertaintyReason ?? (rules.ruleTier === null && floor === 'uncertain' ? 'safety_candidate' : null),
+    reason: rules.uncertaintyReason ?? (rules.ruleTier === null && floor === 'uncertain' ? (ruleOrCandidate === null ? 'help_keyword' : 'safety_candidate') : null),
     createdAt: now,
   });
   await enqueueJob(tx, accountId, 'classify', { inboundId, requestId: request.id }, `classify:${inboundId}`, now);
@@ -308,7 +315,7 @@ export async function materialiseRequest(tx: Tx, deps: Deps, accountId: string, 
   const now = deps.clock.now();
   const read = async () => (await tx.select().from(tables.inboundMessages).where(eq(tables.inboundMessages.id, inboundId)))[0];
   let msg = await read();
-  if (!msg || msg.keyword || msg.handledAs) return { requestId: null, via: 'none' };
+  if (!msg || msg.keyword === 'stop' || msg.handledAs) return { requestId: null, via: 'none' };
   let via: 'existing' | 'intake' | 'minimal' = 'existing';
   if (!msg.requestId) {
     try {
@@ -322,7 +329,9 @@ export async function materialiseRequest(tx: Tx, deps: Deps, accountId: string, 
       let ruleHit = false;
       try {
         const rules = evaluateRules({ text: msg.body, hasMedia: msg.mediaCount > 0, afterHours: ah });
-        floor = intakeFloor(rules, ah);
+        const f = intakeFloor(rules, ah);
+        const d = distressFloor(msg.body);
+        floor = f !== null || d !== null ? maxTier(f, d) : null;
         ruleHit = rules.ruleTier !== null;
       } catch {
         floor = null;

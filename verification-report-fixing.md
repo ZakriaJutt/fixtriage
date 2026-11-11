@@ -336,11 +336,45 @@ Edits made after that retest. Status of every row: **fixed after round-3 retest,
 
 | Set | Miss rate (no floor) | False-page rate (routine paged at once) | Labelled tier by rule | Business hours, emergency with no floor |
 |---|---|---|---|---|
-| Developer's held-out set, written before the v4 tuning and not used for it (`packages/core/test/fixtures/holdout-set.ts`, 20 + 20) | 1/20 (5%); v3: 2/20 | 2/20 (10%); v3: 4/20 | 14/20 | 6/20 |
+| **Independent held-out set, round-4 reviewer (30 + 30, never used for tuning; superseding figure, see 7.8)** | **9/30 (30%)** | **8/30 (27%)** | 11/30 | 19/30 |
+| Developer's held-out set, written before the v4 tuning by the same person who tuned (`packages/core/test/fixtures/holdout-set.ts`, 20 + 20; optimistic) | 1/20 (5%); v3: 2/20 | 2/20 (10%); v3: 4/20 | 14/20 | 6/20 |
 | Reviewer's round-3 set (used for tuning, so not independent; 28 + 40) | 0/28; v3: 9/28 | 1/40 (the chirping smoke detector, kept on purpose); v3: 12/40 | 18/28 | 11/28 (v3: 22/28) |
 
-Both sets are small and synthetic, written by two people; the rates are indicative, not a measurement of real traffic. The remaining after-hours misses still get the EP-10a URGENT prompt. Targets for both rates stay with the owner and the Phase 0 labelled set (the reviewer's retest condition for B1-003).
+All sets are small and synthetic; the rates are indicative, not a measurement of real traffic. **The rules alone are not a reliable safety mechanism**: on unseen text they miss about a third of emergencies after hours. The after-hours safety rests on the EP-10a URGENT reply (now watched for delivery failure, 7.8) and the human escalation chain. The remaining after-hours misses still get the EP-10a URGENT prompt. Targets for both rates stay with the owner and the Phase 0 labelled set (the reviewer's retest condition for B1-003).
 
 Commands, from `code/`, clean test database: `npm run lint` 0 problems; `npm run typecheck` 0 errors; `npm run db:reset-test` applied `0000`..`0006`; `npm run check:migrations`: order linear, drizzle-kit no pending schema change, ORM vs database diff empty; `npm test` **27 files, 222 passed, 0 failed**; `make verify` (lint, typecheck, reset, test) the same 222/222. Reviewer's scripts (not edited): `fixtriage-b1-round3.mts` **17/17** (was 14/17; R2a and R3a use the tuning set), `fixtriage-b1-adversarial.mts` **41/41**.
 
 B1-010 stays open as the reviewer's note. Documents changed in this round: PRD (UR-2 URGENT variants, UR-3 v4 note, EP-10a, SM-09), App-flow (section 7 path "After hours, not paged at once"), TRD (5.1 `/readyz` and `/ops/*` dismiss, 6.3 `intake.process`, 8.5 "Not AI"), schema.md (3.5 round-3 table, `outbound_messages.purpose`, 4 `inbound_health`), AGENTS.md (utilities index), this file. Awaiting recheck.
+
+### 7.8 Retest (round 4) and round-4 fix (2026-11-11)
+
+Reviewer's round-4 verdicts from `_coordination/review/fixtriage-b1-verdicts.json`, copied unchanged (independent reviewer, retest of HEAD `6a7f012`, review `fixtriage-b1-round4.md`):
+
+```json
+{
+  "B1-001": "Closed",
+  "B1-002": "Closed",
+  "B1-003": "Closed, part open: on 30 fresh emergency and 30 fresh routine phrasings (round 4) rule set v4 leaves 9/30 emergencies with no floor after hours (19/30 in business hours) and pages 8/30 routine messages after hours (4/30 rule-tier in business hours); the EP-10a URGENT net covers the after-hours misses only if the tenant gets the line, and a definitive failure of the safety reply or tenant.urgent_prompt is not watched (no request_id on the row, so no FD-5 fallback, no tenant.unreachable, no page, /readyz green)",
+  "B1-004": "Closed",
+  "B1-005": "Closed",
+  "B1-006": "Closed",
+  "B1-007": "Closed",
+  "B1-008": "Closed",
+  "B1-009": "Closed",
+  "B1-010": "Still open: reviewer note only (no ASVS 5.0.0 IDs cited); unchanged by design",
+  "B1-011": "Closed",
+  "B1-012": "Still open: a tenant's bare HELP (also HELP!, help.) is stored as a carrier keyword and never reaches intake: no request, no page, no FixTriage reply, /readyz green (round 4 U4b/U4c, HELP at 23:30: 0 pages in 20 min). New in round 4, major"
+}
+```
+
+Edits made after that retest. Status of every row: **fixed after round-4 retest, awaiting recheck** (not re-reviewed).
+
+| Item | Fix | Regression test (under `code/`) |
+|---|---|---|
+| B1-012 major: a bare `HELP` (also `HELP!`, `help.`) after hours was stored as a carrier keyword and consumed: no request, no page, no reply, `/readyz` green | Lead ruling, PRD FD-7a: only `STOP` and its variants consume a message. `HELP`, `INFO` and `START` are still recorded as keywords (the provider may answer HELP) and then go through intake like any message. A message that is only a call for help (`distressFloor`: HELP, INFO, SOS, "help me", "please help", with punctuation) is at least `uncertain`: after hours it pages at once, in business hours EP-8 (15 min); it always gets the safety reply again. `START` records the opt-in and is tiered normally. View `inbound_health` now excludes only `stop` rows (migration `0007_round4_b1_012`), so a HELP row without a request turns `/readyz` red | `apps/web/test/fix-round4.test.ts` B1-012 (11 cases): `HELP` first message at 23:30 -> `uncertain`, safety reply, Level 1 paged within 1 min, reason `help_keyword`; 7 reply variants after a routine message -> paged; business hours -> paged at 15 min; STOP no request, START request and opt-in; HELP row without request -> `/readyz` red. `ut-01-rules-v4.test.ts` distress floor (18 cases) |
+| B1-003 net: the message carrying "reply URGENT" could fail definitively with nothing watching it (rows had no `request_id`, so FD-5 never ran) | Lead ruling, PRD EP-10a(b): `onOutboundFailed` recognises the rows that carry the line (after-hours safety reply, `tenant.urgent_prompt`) by their dedupe key, creates the request if intake has not yet (`materialiseRequest`), runs FD-5 (email fallback or `tenant.unreachable`), and escalates: tier at least `uncertain`, `cannot_text` set ("phone the tenant"), incident opened and Level 1 paged at once; audit `request.urgent_line_undelivered`. Covers a provider error after retries, a blocked or invalid number (21610) and an `undelivered`/`failed` status callback after `sent` | fix-round4 (5 cases, failing fake provider): safety reply rejected 30003 every time; urgent prompt rejected on the second message; number blocked 21610; status `undelivered` after `sent`; business-hours standard reply failure is not escalated as the net |
+| Rates (coordinator ruling) | PRD SM-09 and 7.7 now lead with the round-4 reviewer's independent held-out result, **9/30 emergencies missed and 8/30 routine messages paged after hours**, with the developer's figures beside it labelled tuned or held-out, and state that the rules alone are not a reliable safety mechanism. No stem, pair or phrase was changed against the reviewer's 60 new phrasings; rule set v4 is unchanged | ut-01-rules-v4 unchanged rule assertions |
+
+Commands, from `code/`, clean test database: `npm run lint` 0 problems; `npm run typecheck` 0 errors; `npm run db:reset-test` applied `0000`..`0007`; `npm run check:migrations`: order linear, drizzle-kit no pending schema change, ORM vs database diff empty; `npm test` **28 files, 256 passed, 0 failed**. Reviewer's scripts (not edited): `fixtriage-b1-round4_adversarial.mts` **19/19** (was 15/19; its INFO rule-coverage measurements are unchanged because rule set v4 is unchanged), `fixtriage-b1-round3.mts` 17/17, `fixtriage-b1-adversarial.mts` 41/41.
+
+Minors the reviewer noted and not changed in this round: the minimal fallback request has no `unit_id`; one safety reply per URGENT rule hit; one prompt per routine text. B1-010 stays open as the reviewer's note. Documents changed: PRD (UR-3, EP-10a(b), FD-7a, SM-09), App-flow (section 7 paths), TRD (8.5, 8.6 keyword sentence), schema.md (3.5 round-4 table, 4), AGENTS.md (utilities index), this file. Awaiting recheck.
