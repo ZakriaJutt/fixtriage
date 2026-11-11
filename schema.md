@@ -119,7 +119,7 @@ B2 sign-in and storage (2026-11-11, migration `0008_b2_sign_in`):
 
 | Object | Change | Why |
 |---|---|---|
-| `recovery_codes` (new, account-owned, RLS forced) | `user_id uuid not null` (composite FK to `users`), `code_hash bytea not null`, `used_at timestamptz null`; unique `(user_id, code_hash)`. Ten per user, shown once at enrolment, replaced at re-enrolment | TRD 8.1 recovery codes, accepted once (V6.5.1) |
+| `recovery_codes` (new, account-owned, RLS forced) | `user_id uuid not null` (composite FK to `users`), `code_phc text not null` (Argon2id, salt per code; was `code_hash bytea` before migration `0009_security_round`), `used_at timestamptz null`; index `(user_id)`. Ten per user, shown once at enrolment, replaced at re-enrolment | TRD 8.1 recovery codes, accepted once (V6.5.1) |
 | `auth_throttle` (new, global, no personal data) | `key_hash bytea` primary key (SHA-256 of scope and normalised email or client address), `window_start`, `hits`, `locked_until`. No grant to the application role; written only by the `auth_throttle_*` functions | Sign-in rate limit and lockout (V6.3.1) |
 | `capability_tokens` | `purpose` adds `invite` (enrolment link, 72 h) and `reset` (password reset, 30 min); check `capability_tokens_user_target`: both need `user_id`. One live link per user and purpose | Invitation and reset links (TRD 8.1); never a sign-in factor |
 | `users` | Invited users get `password_hash = '!unset'` (never a valid Argon2id string) and no TOTP until enrolment; `totp_last_step` is the last accepted step | TRD 8.1 |
@@ -198,7 +198,7 @@ Round-4 fix (2026-11-11, review fixtriage-b1-round4.md), fixed after round-4 ret
 | `auth_create_session`, `auth_touch_session`, `auth_revoke_session` (B2) | Sign-in, every authenticated request, sign-out | Write only: create returns `expires_at`; a session is created only for an enabled user with confirmed TOTP or an enabled operator with a TOTP secret |
 | `auth_revoke_user_sessions(user_id)` (B2) | Disable, reset, re-enrolment, inside `withAccount` | A count; changes nothing for a user of another account than `app.account_id` |
 | `auth_operator_accept_totp(operator_id, step)` (B2) | Operator sign-in | A boolean; stores the accepted TOTP step only if it is newer (V6.5.1) |
-| `auth_throttle_check`, `auth_throttle_hit`, `auth_throttle_clear` (B2) | Sign-in, reset, enrolment | Seconds of lockout left (an integer); keys are SHA-256 hashes, no email or address |
+| `auth_throttle_take`, `auth_backoff_take`, `auth_throttle_clear` (B2; take functions replace `auth_throttle_check`/`_hit` in `0009_security_round`) | Sign-in, reset, enrolment, link codes | Seconds to wait (an integer; 0 = counted and allowed), decided under a row lock; keys are SHA-256 hashes, no email or address |
 
   None returns message text, names, phone numbers or addresses. Tables `operators`, `rule_sets`, `probe_runs` are global and hold no tenant data. IT-10 calls every function and view with crafted inputs and checks the column list.
 - Cross-account denial: a foreign-key lookup of another account's ID returns "not found"; composite foreign keys `(account_id, id)` on child tables prevent a row in one account from referencing a parent in another. References to `operators` (`escalation_steps.target_operator_id`, `escalations.operator_engaged_by`, `relayed_by_operator_id`, `sessions.operator_id`) are plain foreign keys because operators belong to no account.

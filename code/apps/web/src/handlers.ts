@@ -46,7 +46,12 @@ const log = createLogger('web');
 export interface WebDeps extends AuthDeps {
   twilioAuthToken: string;
   postmarkSecret: string;
+  /** Addresses of our own load balancers or proxies (TRUSTED_PROXIES). Empty: the direct peer is the client. */
+  trustedProxies?: string[];
 }
+
+/** Header the web entry point (src/serve.ts) sets from the TCP socket, overwriting anything the client sent. */
+export const PEER_HEADER = 'x-fixtriage-peer';
 
 export const SESSION_COOKIE = '__Host-ft_session';
 export const CSRF_HEADER = 'x-csrf-token';
@@ -68,12 +73,25 @@ function withCookies(res: Response, cookies: string[]): Response {
   return res;
 }
 
+const normIp = (a: string) => a.trim().replace(/^::ffff:/i, '').toLowerCase();
+
 /**
- * Client address for the per-client sign-in limit. Behind the load balancer the first X-Forwarded-For hop is the
- * client (the balancer overwrites the header); without it every request shares one bucket, which fails safe.
+ * Client address for the per-client limit (security round, item 2). The direct TCP peer is the client unless it is a
+ * configured trusted proxy; then X-Forwarded-For is read from the right and the first hop that is not a trusted proxy
+ * is the client (hops further left are client-supplied and ignored). A missing peer (no entry point in front) falls
+ * back to one shared bucket, which only ever limits more.
  */
-function clientOf(req: Request): string {
-  return (req.headers.get('x-forwarded-for') ?? '').split(',')[0]!.trim() || 'unknown';
+export function clientOf(req: Request, peer: string | undefined, trusted: readonly string[] = []): string {
+  if (!peer) return 'unknown-peer';
+  const t = new Set(trusted.map(normIp));
+  let client = normIp(peer);
+  if (!t.has(client)) return client;
+  const hops = (req.headers.get('x-forwarded-for') ?? '').split(',').map(normIp).filter(Boolean);
+  for (let i = hops.length - 1; i >= 0; i--) {
+    client = hops[i]!;
+    if (!t.has(client)) return client;
+  }
+  return client;
 }
 
 /** Pre-session auth routes take JSON only: a cross-site form cannot send application/json without a preflight (login CSRF). */
@@ -110,17 +128,18 @@ function cookie(req: Request, name: string): string | null {
   return null;
 }
 
-type Handler = (req: Request, params: Record<string, string>) => Promise<Response>;
+/** `peer` is the direct TCP peer address as the entry point saw it (undefined when unknown). */
+type Handler = (req: Request, params: Record<string, string>, peer?: string) => Promise<Response>;
 
 export function createHandlers(deps: WebDeps): Record<string, Handler> {
   const twilioOk = (path: string, req: Request, params: Record<string, string>) => verifyTwilioSignature(deps.twilioAuthToken, publicUrl(deps.publicBaseUrl, path), params, req.headers.get('x-twilio-signature'));
 
-  const traced = (name: string, h: (req: Request, params: Record<string, string>, cid: string) => Promise<Response>): Handler =>
-    (req, params) => {
+  const traced = (name: string, h: (req: Request, params: Record<string, string>, cid: string, peer: string | undefined) => Promise<Response>): Handler =>
+    (req, params, peer) => {
       const cid = newCorrelationId();
       return withCorrelation(cid, async () => {
         try {
-          return await h(req, params, cid);
+          return await h(req, params, cid, peer);
         } catch (e) {
           if (e instanceof SignInError) {
             log.warn('auth.sign_in_refused', { route: name, code: e.code });
@@ -222,7 +241,7 @@ export function createHandlers(deps: WebDeps): Record<string, Handler> {
       const r = params.CallSid ? await ackByVoice(deps, params.CallSid, params.Digits ?? '') : null;
       if (r && 'engaged' in r) return xml('<Say>Recorded: operator engaged. The escalation continues until a person of the account acknowledges.</Say>');
       if (r?.ok) return xml('<Say>Acknowledged. Please record the outcome within 30 minutes.</Say>');
-      if (r && !r.ok) return xml('<Say>This report was already acknowledged.</Say>');
+      if (r && !r.ok && r.reason === 'already_acknowledged') return xml('<Say>This report was already acknowledged.</Say>');
       return xml('<Say>Not acknowledged.</Say>');
     }),
 
@@ -251,9 +270,9 @@ export function createHandlers(deps: WebDeps): Record<string, Handler> {
     }),
 
     // ---------- B2 sign-in (TRD 8.1; T-2.1.3) ----------
-    'POST /auth/sign-in': traced('auth.sign_in', async (req) => {
+    'POST /auth/sign-in': traced('auth.sign_in', async (req, _p, _cid, peer) => {
       const b = await jsonBody(req);
-      const r = await signIn(deps, { email: str(b.email, 254), password: str(b.password, 1024), code: str(b.code, 32), client: clientOf(req), presentedToken: cookie(req, SESSION_COOKIE) });
+      const r = await signIn(deps, { email: str(b.email, 254), password: str(b.password, 1024), code: str(b.code, 32), client: clientOf(req, peer, deps.trustedProxies), presentedToken: cookie(req, SESSION_COOKIE) });
       return withCookies(json(200, { kind: r.kind, role: r.role, csrf_token: r.csrf, expires_at: r.expiresAt.toISOString() }), sessionCookies(r.token, r.csrf, 7 * 24 * 3600));
     }),
 
@@ -274,34 +293,35 @@ export function createHandlers(deps: WebDeps): Record<string, Handler> {
       return withCookies(json(200, { kind: s.operator_id ? 'operator' : 'user', role: s.role, user_id: s.user_id, operator_id: s.operator_id, expires_at: s.expires_at }), []);
     }),
 
-    'POST /auth/enrol/start': traced('auth.enrol_start', async (req) => {
+    'POST /auth/enrol/start': traced('auth.enrol_start', async (req, _p, _cid, peer) => {
       const b = await jsonBody(req);
-      const r = await startEnrolment(deps, { token: str(b.token, 100), password: str(b.password, 1024), client: clientOf(req) });
+      const r = await startEnrolment(deps, { token: str(b.token, 100), password: str(b.password, 1024), client: clientOf(req, peer, deps.trustedProxies) });
       return withCookies(json(200, { otpauth_uri: r.otpauthUri, secret: r.secret }), []);
     }),
 
-    'POST /auth/enrol/confirm': traced('auth.enrol_confirm', async (req) => {
+    'POST /auth/enrol/confirm': traced('auth.enrol_confirm', async (req, _p, _cid, peer) => {
       const b = await jsonBody(req);
-      const r = await confirmEnrolment(deps, { token: str(b.token, 100), code: str(b.code, 32), client: clientOf(req) });
+      const r = await confirmEnrolment(deps, { token: str(b.token, 100), code: str(b.code, 32), client: clientOf(req, peer, deps.trustedProxies) });
       return withCookies(json(200, { role: r.role, recovery_codes: r.recoveryCodes, csrf_token: r.csrf }), sessionCookies(r.token, r.csrf, 7 * 24 * 3600));
     }),
 
-    'POST /auth/reset/request': traced('auth.reset_request', async (req) => {
+    'POST /auth/reset/request': traced('auth.reset_request', async (req, _p, _cid, peer) => {
       const b = await jsonBody(req);
-      await requestReset(deps, { email: str(b.email, 254), client: clientOf(req) });
+      await requestReset(deps, { email: str(b.email, 254), client: clientOf(req, peer, deps.trustedProxies) });
       return json(202, { status: 'if the address belongs to an enrolled user, a link was sent' });
     }),
 
-    'POST /auth/reset/complete': traced('auth.reset_complete', async (req) => {
+    'POST /auth/reset/complete': traced('auth.reset_complete', async (req, _p, _cid, peer) => {
       const b = await jsonBody(req);
-      await completeReset(deps, { token: str(b.token, 100), code: str(b.code, 32), password: str(b.password, 1024), client: clientOf(req) });
+      await completeReset(deps, { token: str(b.token, 100), code: str(b.code, 32), password: str(b.password, 1024), client: clientOf(req, peer, deps.trustedProxies) });
       return withCookies(new Response(null, { status: 204 }), CLEAR_COOKIES);
     }),
 
     'POST /api/settings/users': staff('users.invite', true, async (p, req) => {
       const b = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-      const r = await inviteUser(deps, p, { email: str(b.email, 254), displayName: str(b.display_name, 200), role: str(b.role, 20) as 'manager' });
-      return json(201, { user_id: r.userId });
+      await inviteUser(deps, p, { email: str(b.email, 254), displayName: str(b.display_name, 200), role: str(b.role, 20) as 'manager' });
+      // Item 5: the same answer whether or not the address is free elsewhere; the users list shows who was invited.
+      return json(202, { status: 'invitation_sent' });
     }),
 
     'POST /api/settings/users/:id/disable': staff('users.disable', true, async (p, _req, params) => json(200, await disableUser(deps, p, idParam(params)))),
@@ -418,6 +438,7 @@ export function createHandlers(deps: WebDeps): Record<string, Handler> {
     'POST /a/:token': traced('ack_link.post', async (_req, params, cid) => {
       const r = await ackByToken(deps, params.token ?? '');
       if (!r) return error(404, 'not_found', cid);
+      if (!r.ok && r.reason === 'user_disabled') return error(403, 'user_disabled', cid);
       return r.ok ? json(200, { acknowledged: true }) : json(409, { error: { code: r.reason, correlation_id: cid } });
     }),
   };

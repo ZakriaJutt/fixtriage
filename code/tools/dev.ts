@@ -25,7 +25,7 @@ if (!loadLocalEnvFile(`${CODE}.env`)) fail('settings', 'code/.env is missing: co
 
 const env = {
   ...process.env,
-  NODE_ENV: 'development',
+  NODE_ENV: 'development' as const,
   DATABASE_URL: appUrl('dev'),
   PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL ?? `http://localhost:${WEB_PORT}`,
   // Local fakes only: random per run, never committed, never a real provider secret.
@@ -34,6 +34,7 @@ const env = {
   PAGING_FROM_NUMBER: process.env.PAGING_FROM_NUMBER ?? '+16045550199',
   MONITOR_URL: `http://127.0.0.1:${MONITOR_PORT}`,
   MONITOR_PORT: String(MONITOR_PORT),
+  WEB_PORT: String(WEB_PORT),
   READY_URL: `http://127.0.0.1:${WEB_PORT}/readyz`,
 };
 
@@ -57,7 +58,8 @@ try {
 }
 
 run('monitor', ['--import', 'tsx', 'tools/monitor-fake/src/main.ts']);
-run('web', [fileURLToPath(new URL('../node_modules/next/dist/bin/next', import.meta.url)), 'dev', '-p', String(WEB_PORT)], `${CODE}apps/web`);
+// Web starts through its entry point so the peer address is taken from the socket (security round, item 2).
+run('web', ['--import', 'tsx', 'src/serve.ts'], `${CODE}apps/web`);
 run('worker', ['--import', 'tsx', 'apps/worker/src/main.ts']);
 
 async function waitHttp(part: string, url: string, ms: number): Promise<number> {

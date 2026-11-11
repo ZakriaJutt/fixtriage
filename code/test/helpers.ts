@@ -183,10 +183,11 @@ export async function twilioPost(h: Harness, path: string, params: Record<string
   return call(h, 'POST', path, req);
 }
 
-export async function call(h: Harness, method: string, path: string, req?: Request): Promise<Response> {
+/** `peer` is the direct TCP peer address, as the web entry point passes it (security round, item 2). */
+export async function call(h: Harness, method: string, path: string, req?: Request, peer = '192.0.2.1'): Promise<Response> {
   const r = route(h.handlers, method, path);
   if (!r) throw new Error(`no route ${method} ${path}`);
-  return r.handler(req ?? new Request(`http://internal${path}`, { method }), r.params);
+  return r.handler(req ?? new Request(`http://internal${path}`, { method }), r.params, peer);
 }
 
 export async function staffCall(h: Harness, method: string, path: string, session: { cookie: string; csrf: string } | null, body?: unknown, extra: Record<string, string> = {}): Promise<Response> {

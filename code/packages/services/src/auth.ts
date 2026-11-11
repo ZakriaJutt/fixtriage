@@ -16,7 +16,7 @@ import {
   open,
   otpauthUri,
   publicUrl,
-  recoveryCodeHash,
+  normaliseRecoveryCode,
   seal,
   sha256,
   UNSET_PASSWORD,
@@ -25,7 +25,7 @@ import {
   type PasswordProblem,
 } from '@fixtriage/platform';
 import { audit, ConflictError, ForbiddenError, NotFoundError, serviceLog, withAccount, type Deps } from './context';
-import type { StaffPrincipal } from './staff';
+import { AuthError, type StaffPrincipal } from './staff';
 
 export interface AuthDeps extends Deps {
   mailer: Mailer;
@@ -33,12 +33,17 @@ export interface AuthDeps extends Deps {
   totpKey: Buffer;
 }
 
-/** Rate-limit and lockout policy (V6.3.1, V6.1.1; documented in TRD 8.1). */
+/**
+ * Rate-limit policy (V6.3.1, V6.1.1; TRD 8.1, App-flow S-01). Security round item 4: no hard lock of a sign-in
+ * identity, so that nobody can lock the on-call manager out; instead a capped back-off per identity (normalised
+ * email, whether or not it exists) plus the per-client limit. Every limit is counted atomically before the
+ * credentials are checked (item 3).
+ */
 export const SIGN_IN_POLICY = {
-  /** Failed sign-ins per email before a delay; App-flow S-01 "five failures start a delay". */
-  perEmailFailures: 5,
-  perEmailWindowS: 15 * 60,
-  perEmailLockS: 15 * 60,
+  /** Sign-in attempts per identity before a wait starts; then 1 s, 2 s, 4 s ... between attempts, at most maxDelayS. */
+  freeFailures: 5,
+  maxDelayS: 30,
+  backoffWindowS: 15 * 60,
   /** All sign-in, reset and enrolment attempts per client address. */
   perClientAttempts: 30,
   perClientWindowS: 15 * 60,
@@ -46,6 +51,11 @@ export const SIGN_IN_POLICY = {
   /** Reset requests per email (stops mail flooding). */
   perEmailResets: 3,
   perEmailResetWindowS: 60 * 60,
+  /** Code attempts on one enrolment or reset link; the link is burned when they are used up (item 2). */
+  perLinkCodeAttempts: 5,
+  /** Code attempts on all enrolment and reset links of one account per window (item 2). */
+  perAccountCodeAttempts: 20,
+  perAccountCodeWindowS: 15 * 60,
   inviteTtlMs: 72 * 3600_000,
   resetTtlMs: 30 * 60_000,
 } as const;
@@ -61,14 +71,30 @@ export class SignInError extends Error {
   }
 }
 
+const pending = new Set<Promise<unknown>>();
+
+/** Work that must not delay or shape a response (reset mail, notices). Failures are logged, never thrown. */
+export function background(p: Promise<unknown>): void {
+  const q = p.catch((e: unknown) => serviceLog.error('auth.background_failed', { error: e instanceof Error ? e.name : 'unknown' })).finally(() => pending.delete(q));
+  pending.add(q);
+}
+
+/** Waits for all background work (tests, graceful shutdown). */
+export async function settleBackground(): Promise<void> {
+  while (pending.size) await Promise.all([...pending]);
+}
+
 const throttleKey = (scope: string, value: string) => sha256(`${scope}:${value.trim().toLowerCase()}`);
 
-async function throttleCheck(deps: Deps, key: Buffer): Promise<number> {
-  const r = await deps.database.pool.query('select auth_throttle_check($1) as s', [key]);
+/** Fixed-window limit, counted and decided in one locked statement. 0 = go ahead; else seconds to wait. */
+async function throttleTake(deps: Deps, key: Buffer, limit: number, windowS: number, lockS: number): Promise<number> {
+  const r = await deps.database.pool.query('select auth_throttle_take($1, $2, $3, $4, $5) as s', [key, deps.clock.now(), limit, windowS, lockS]);
   return Number(r.rows[0].s);
 }
-async function throttleHit(deps: Deps, key: Buffer, limit: number, windowS: number, lockS: number): Promise<number> {
-  const r = await deps.database.pool.query('select auth_throttle_hit($1, $2, $3, $4) as s', [key, limit, windowS, lockS]);
+/** Capped back-off per sign-in identity (item 4). 0 = go ahead; else seconds to wait (at most maxDelayS). */
+async function backoffTake(deps: Deps, key: Buffer): Promise<number> {
+  const p = SIGN_IN_POLICY;
+  const r = await deps.database.pool.query('select auth_backoff_take($1, $2, $3, $4, $5) as s', [key, deps.clock.now(), p.freeFailures, p.maxDelayS, p.backoffWindowS]);
   return Number(r.rows[0].s);
 }
 async function throttleClear(deps: Deps, key: Buffer): Promise<void> {
@@ -77,11 +103,26 @@ async function throttleClear(deps: Deps, key: Buffer): Promise<void> {
 
 /** Per-client attempt counter shared by every unauthenticated auth route. */
 async function countClientAttempt(deps: Deps, client: string): Promise<void> {
-  const k = throttleKey('client', client);
-  const locked = await throttleCheck(deps, k);
-  if (locked > 0) throw new SignInError('rate_limited', locked);
   const p = SIGN_IN_POLICY;
-  await throttleHit(deps, k, p.perClientAttempts, p.perClientWindowS, p.perClientLockS);
+  const wait = await throttleTake(deps, throttleKey('client', client), p.perClientAttempts, p.perClientWindowS, p.perClientLockS);
+  if (wait > 0) throw new SignInError('rate_limited', wait);
+}
+
+/**
+ * Item 2: a code attempt on an enrolment or reset link counts against the link (burned when used up) and against
+ * the account, before the code is checked.
+ */
+async function countLinkCodeAttempt(deps: Deps, token: string, link: { accountId: string }): Promise<void> {
+  const p = SIGN_IN_POLICY;
+  const acct = await throttleTake(deps, throttleKey('link-codes-account', link.accountId), p.perAccountCodeAttempts, p.perAccountCodeWindowS, p.perAccountCodeWindowS);
+  if (acct > 0) throw new SignInError('rate_limited', acct);
+  const ttlS = Math.ceil(Math.max(p.inviteTtlMs, p.resetTtlMs) / 1000);
+  const perLink = await throttleTake(deps, throttleKey('link-codes', sha256(token).toString('hex')), p.perLinkCodeAttempts, ttlS, ttlS);
+  if (perLink > 0) {
+    await withAccount(deps.database, link.accountId, (tx) => tx.update(tables.capabilityTokens).set({ usedAt: deps.clock.now() }).where(and(eq(tables.capabilityTokens.tokenHash, sha256(token)), isNull(tables.capabilityTokens.usedAt))));
+    serviceLog.warn('auth.link_burned', { reason: 'code_attempts' });
+    throw new SignInError('invalid_link');
+  }
 }
 
 export interface NewSession {
@@ -125,12 +166,14 @@ async function acceptUserSecondFactor(tx: Tx, deps: AuthDeps, user: { id: string
     return r.length === 1 ? 'totp' : null;
   }
   if (looksLikeRecoveryCode(c)) {
-    const r = await tx
-      .update(tables.recoveryCodes)
-      .set({ usedAt: deps.clock.now() })
-      .where(and(eq(tables.recoveryCodes.userId, user.id), eq(tables.recoveryCodes.codeHash, recoveryCodeHash(c)), isNull(tables.recoveryCodes.usedAt)))
-      .returning({ id: tables.recoveryCodes.id });
-    return r.length === 1 ? 'recovery' : null;
+    // V6.5.2: salted Argon2id per code, so every unused code is verified in turn (at most ten).
+    const unused = await tx.select({ id: tables.recoveryCodes.id, phc: tables.recoveryCodes.codePhc }).from(tables.recoveryCodes).where(and(eq(tables.recoveryCodes.userId, user.id), isNull(tables.recoveryCodes.usedAt)));
+    for (const u of unused) {
+      if (!(await verifyPassword(normaliseRecoveryCode(c), u.phc))) continue;
+      const r = await tx.update(tables.recoveryCodes).set({ usedAt: deps.clock.now() }).where(and(eq(tables.recoveryCodes.id, u.id), isNull(tables.recoveryCodes.usedAt))).returning({ id: tables.recoveryCodes.id });
+      return r.length === 1 ? 'recovery' : null;
+    }
+    return null;
   }
   return null;
 }
@@ -147,17 +190,16 @@ export interface SignInResult extends NewSession {
  */
 export async function signIn(deps: AuthDeps, input: { email: string; password: string; code: string; client: string; presentedToken?: string | null }): Promise<SignInResult> {
   await countClientAttempt(deps, input.client);
+  // Item 3: the attempt is counted (and the wait decided) atomically before the password is checked.
   const emailKey = throttleKey('signin-email', input.email);
-  const locked = await throttleCheck(deps, emailKey);
-  if (locked > 0) {
-    await dummyPasswordWork(input.password);
-    throw new SignInError('rate_limited', locked);
+  const wait = await backoffTake(deps, emailKey);
+  if (wait > 0) {
+    serviceLog.warn('auth.sign_in_delayed', { wait_s: wait });
+    throw new SignInError('rate_limited', wait);
   }
   const fail = async (): Promise<never> => {
-    const p = SIGN_IN_POLICY;
-    const lock = await throttleHit(deps, emailKey, p.perEmailFailures, p.perEmailWindowS, p.perEmailLockS);
-    serviceLog.warn('auth.sign_in_failed', { locked: lock > 0 });
-    throw lock > 0 ? new SignInError('rate_limited', lock) : new SignInError('invalid_credentials');
+    serviceLog.warn('auth.sign_in_failed', {});
+    throw new SignInError('invalid_credentials');
   };
   const r = await deps.database.pool.query('select * from resolve_login($1)', [input.email.trim()]);
   const row = r.rows[0] as { user_id: string | null; operator_id: string | null; account_id: string | null; password_hash: string; totp_secret_enc: Buffer | null; totp_confirmed_at: Date | null; totp_last_step: string | null; disabled_at: Date | null } | undefined;
@@ -235,14 +277,24 @@ async function sendInvite(deps: AuthDeps, email: string, token: string, reenrol:
 }
 
 /** POST /api/settings/users: an owner invites a manager or owner. The user exists at once but cannot sign in until enrolled. */
-export async function inviteUser(deps: AuthDeps, p: StaffPrincipal, input: { email: string; displayName: string; role: 'owner' | 'manager' }): Promise<{ userId: string }> {
+export async function inviteUser(deps: AuthDeps, p: StaffPrincipal, input: { email: string; displayName: string; role: 'owner' | 'manager' }): Promise<{ userId: string | null }> {
   requireOwner(p);
   const email = input.email.trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) throw new ConflictError('invalid_email');
   if (!input.displayName.trim()) throw new ConflictError('invalid_name');
   if (input.role !== 'owner' && input.role !== 'manager') throw new ConflictError('invalid_role');
-  const exists = await deps.database.pool.query('select 1 from resolve_login($1)', [email]);
-  if (exists.rowCount) throw new ConflictError('email_in_use');
+  // Item 5: only this account's own users are reported as "in use". An address used by another account or an operator
+  // gets the same answer as a new invitation and a notice to that address instead of an invitation (no user created).
+  const elsewhere = await deps.database.pool.query('select user_id, account_id from resolve_login($1)', [email]);
+  const row = elsewhere.rows[0] as { user_id: string | null; account_id: string | null } | undefined;
+  if (row && row.account_id === p.accountId) throw new ConflictError('email_in_use');
+  if (row) {
+    await withAccount(deps.database, p.accountId, (tx) => audit(tx, { accountId: p.accountId, actorKind: 'user', actorId: p.userId, action: 'user.invite_address_unavailable', objectType: 'account', objectId: p.accountId }, deps.clock.now()));
+    background(
+      deps.mailer.send({ to: email, subject: 'FixTriage: an invitation could not be completed', text: 'Someone tried to invite this email address to a FixTriage account. One address can belong to one FixTriage sign-in only, so no invitation was created. If you expected it, ask the sender to use a different address.' }),
+    );
+    return { userId: null };
+  }
   const { userId, token } = await withAccount(deps.database, p.accountId, async (tx) => {
     const now = deps.clock.now();
     const [u] = await tx.insert(tables.users).values({ accountId: p.accountId, email, displayName: input.displayName.trim(), role: input.role, passwordHash: UNSET_PASSWORD, createdAt: now, updatedAt: now }).returning({ id: tables.users.id });
@@ -306,7 +358,9 @@ export async function confirmEnrolment(deps: AuthDeps, input: { token: string; c
   await countClientAttempt(deps, input.client);
   const link = await liveLink(deps, input.token, 'invite');
   if (!link) throw new SignInError('invalid_link');
+  await countLinkCodeAttempt(deps, input.token, link);
   const codes = newRecoveryCodes();
+  const codePhcs = await Promise.all(codes.map((c) => hashPassword(normaliseRecoveryCode(c))));
   const role = await withAccount(deps.database, link.accountId, async (tx) => {
     const now = deps.clock.now();
     const [u] = await tx.select().from(tables.users).where(eq(tables.users.id, link.userId));
@@ -317,7 +371,7 @@ export async function confirmEnrolment(deps: AuthDeps, input: { token: string; c
     if (!used.length) throw new SignInError('invalid_link');
     await tx.update(tables.users).set({ totpConfirmedAt: now, totpLastStep: step, updatedAt: now }).where(eq(tables.users.id, u.id));
     await tx.delete(tables.recoveryCodes).where(eq(tables.recoveryCodes.userId, u.id));
-    await tx.insert(tables.recoveryCodes).values(codes.map((c) => ({ accountId: link.accountId, userId: u.id, codeHash: recoveryCodeHash(c), createdAt: now })));
+    await tx.insert(tables.recoveryCodes).values(codePhcs.map((phc) => ({ accountId: link.accountId, userId: u.id, codePhc: phc, createdAt: now })));
     await audit(tx, { accountId: link.accountId, actorKind: 'user', actorId: u.id, action: 'auth.enrolled', objectType: 'user', objectId: u.id }, now);
     return u.role as 'owner' | 'manager';
   });
@@ -327,13 +381,19 @@ export async function confirmEnrolment(deps: AuthDeps, input: { token: string; c
 
 // ---------- Reset (V6.4.3: a reset cannot bypass the second factor) ----------
 
-/** POST /auth/reset/request: always the same answer; a link is mailed only to an enrolled, enabled user. */
+/**
+ * POST /auth/reset/request: the answer is the same and immediate whether or not the account exists (item 5). Only the
+ * per-client limit is decided before answering; the lookup, link and mail run in the background.
+ */
 export async function requestReset(deps: AuthDeps, input: { email: string; client: string }): Promise<void> {
   await countClientAttempt(deps, input.client);
-  const k = throttleKey('reset-email', input.email);
-  if ((await throttleCheck(deps, k)) > 0) return; // silently: the answer must not differ
+  background(resetInBackground(deps, input.email));
+}
+
+async function resetInBackground(deps: AuthDeps, emailIn: string): Promise<void> {
+  const input = { email: emailIn };
   const p = SIGN_IN_POLICY;
-  await throttleHit(deps, k, p.perEmailResets, p.perEmailResetWindowS, p.perEmailResetWindowS);
+  if ((await throttleTake(deps, throttleKey('reset-email', input.email), p.perEmailResets, p.perEmailResetWindowS, p.perEmailResetWindowS)) > 0) return;
   const r = await deps.database.pool.query('select user_id, account_id, totp_confirmed_at, disabled_at from resolve_login($1)', [input.email.trim()]);
   const row = r.rows[0] as { user_id: string | null; account_id: string | null; totp_confirmed_at: Date | null; disabled_at: Date | null } | undefined;
   if (!row?.user_id || !row.account_id || !row.totp_confirmed_at || row.disabled_at) return;
@@ -352,6 +412,7 @@ export async function completeReset(deps: AuthDeps, input: { token: string; code
   if (!link) throw new SignInError('invalid_link');
   const problem = checkPasswordPolicy(input.password);
   if (problem) throw new SignInError('weak_password', 0, problem);
+  await countLinkCodeAttempt(deps, input.token, link);
   const hash = await hashPassword(input.password);
   await withAccount(deps.database, link.accountId, async (tx) => {
     const now = deps.clock.now();
@@ -375,14 +436,21 @@ export async function disableUser(deps: AuthDeps, p: StaffPrincipal, userId: str
   if (userId === p.userId) throw new ConflictError('cannot_disable_self');
   return withAccount(deps.database, p.accountId, async (tx) => {
     const now = deps.clock.now();
+    // Item 5: the enabled owners are locked, so two owners cannot disable each other at the same time.
+    const owners = await tx.execute(sql`select id from users where role = 'owner' and disabled_at is null for update`);
+    const ownerIds = (owners.rows as Array<{ id: string }>).map((r) => r.id);
+    if (!ownerIds.includes(p.userId)) throw new AuthError('no_session'); // the acting owner was disabled meanwhile
     const [u] = await tx.select().from(tables.users).where(eq(tables.users.id, userId));
     if (!u) throw new NotFoundError('user');
     if (u.disabledAt) return { revokedSessions: 0 };
+    if (u.role === 'owner' && ownerIds.filter((id) => id !== userId).length === 0) throw new ConflictError('last_owner');
     // EP-9: disabling is refused while the user is on a current or future on-call shift (S-14 AC).
     const shifts = await tx.select({ id: tables.oncallShifts.id }).from(tables.oncallShifts).where(and(eq(tables.oncallShifts.userId, userId), sql`${tables.oncallShifts.endsAt} > ${now}`));
     if (shifts.length) throw new ConflictError('on_call_coverage');
     await tx.update(tables.users).set({ disabledAt: now, updatedAt: now, version: sql`${tables.users.version} + 1` }).where(eq(tables.users.id, userId));
     const n = await revokeUserSessions(tx, userId);
+    // Item 1: outstanding acknowledgement (and enrolment or reset) links of the user stop working.
+    await tx.update(tables.capabilityTokens).set({ usedAt: now }).where(and(eq(tables.capabilityTokens.userId, userId), isNull(tables.capabilityTokens.usedAt)));
     await audit(tx, { accountId: p.accountId, actorKind: 'user', actorId: p.userId, action: 'user.disabled', objectType: 'user', objectId: userId }, now);
     return { revokedSessions: n };
   });

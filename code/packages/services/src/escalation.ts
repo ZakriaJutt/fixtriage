@@ -331,7 +331,7 @@ export async function onPageChannelFailed(tx: Tx, deps: Deps, accountId: string,
 }
 
 export type AckVia = 'voice' | 'link' | 'app' | 'operator_relay';
-export type AckResult = { ok: true; escalationId: string } | { ok: false; reason: 'already_acknowledged' | 'version_conflict' };
+export type AckResult = { ok: true; escalationId: string } | { ok: false; reason: 'already_acknowledged' | 'version_conflict' | 'user_disabled' };
 
 /** T4: one acknowledgement wins; a concurrent second gets "already acknowledged" (IT-08). Only a person of the account acknowledges (EP-5). */
 export async function acknowledge(
@@ -341,6 +341,13 @@ export async function acknowledge(
   input: { escalationId: string; userId: string; via: AckVia; stepId?: string | null; expectedVersion?: number; relayedByOperatorId?: string },
 ): Promise<AckResult> {
   const now = deps.clock.now();
+  // Security round item 1: a disabled user's link, keypress, app call or relayed acceptance never ends paging (EP-5:
+  // only a person of the account acknowledges, and a disabled user no longer acts for it). The escalation goes on.
+  const [who] = await tx.select({ disabledAt: tables.users.disabledAt }).from(tables.users).where(eq(tables.users.id, input.userId));
+  if (!who || who.disabledAt) {
+    await audit(tx, { accountId, actorKind: 'user', actorId: input.userId, action: 'escalation.ack_refused', objectType: 'escalation', objectId: input.escalationId, after: { via: input.via, reason: 'user_disabled' } }, now);
+    return { ok: false, reason: 'user_disabled' };
+  }
   const updated = await tx
     .update(tables.escalations)
     .set({

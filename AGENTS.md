@@ -99,6 +99,8 @@ Utilities index (B1, paths under `code/`):
 | Mail and storage from settings (B2) | `packages/platform/src/providers/factory.ts` | `createMailer`, `createStorage` |
 | Attachment store and authorised read (B2) | `packages/services/src/attachments.ts` | `storeAttachment`, `readAttachment`, `sniffContentType` |
 | Local settings file loader (B2) | `packages/platform/src/config.ts` | `loadLocalEnvFile` |
+| Client address for rate limits; web entry point recording the TCP peer (security round) | `apps/web/src/handlers.ts`, `apps/web/src/serve.ts` | `clientOf`, `PEER_HEADER` |
+| Background work for answers that must not wait (security round) | `packages/services/src/auth.ts` | `background`, `settleBackground` |
 
 ## 7. Account safety
 

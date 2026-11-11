@@ -825,7 +825,7 @@ export const unroutedInbound = pgTable(
 
 // ---------- B2 sign-in (TRD 8.1) ----------
 
-/** Single-use recovery codes for a user's second factor (V6.5.1). Stored hashed; shown once at enrolment. */
+/** Single-use recovery codes (V6.5.1). Argon2id with a salt per code (V6.5.2, security round); shown once at enrolment. */
 export const recoveryCodes = pgTable(
   'recovery_codes',
   {
@@ -833,11 +833,11 @@ export const recoveryCodes = pgTable(
     createdAt: createdAt(),
     accountId: uuid('account_id').notNull().references(() => accounts.id),
     userId: uuid('user_id').notNull(),
-    codeHash: bytea('code_hash').notNull(),
+    codePhc: text('code_phc').notNull(),
     usedAt: ts('used_at'),
   },
   (t) => [
-    unique('recovery_codes_user_code_uq').on(t.userId, t.codeHash),
+    index('recovery_codes_user_idx').on(t.userId),
     foreignKey({ name: 'recovery_codes_user_fk', columns: [t.accountId, t.userId], foreignColumns: [users.accountId, users.id] }),
     isolation('recovery_codes'),
   ],
@@ -866,7 +866,7 @@ export const GLOBAL_TABLES = ['operators', 'sessions', 'rule_sets', 'probe_runs'
 /** B2 (migration 0008): the only writers of sessions, operator TOTP state and the sign-in throttle (schema.md 4). */
 export const AUTH_FUNCTIONS = [
   'auth_create_session', 'auth_touch_session', 'auth_revoke_session', 'auth_revoke_user_sessions',
-  'auth_operator_accept_totp', 'auth_throttle_check', 'auth_throttle_hit', 'auth_throttle_clear',
+  'auth_operator_accept_totp', 'auth_throttle_take', 'auth_backoff_take', 'auth_throttle_clear',
 ] as const;
 
 /** Objects created by migrations/0001 that Drizzle cannot express; checked by the ORM-diff test (IT-14). */

@@ -4,7 +4,7 @@ import { migrate } from '@fixtriage/db/migrate';
 import { seedRuleSets } from '@fixtriage/services';
 
 export default async function setup(): Promise<void> {
-  process.env.NODE_ENV = 'test';
+  (process.env as Record<string, string>).NODE_ENV = 'test';
   await migrate(ownerUrl('test'));
   await seedRuleSets(ownerUrl('test'));
 }

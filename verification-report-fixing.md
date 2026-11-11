@@ -440,3 +440,27 @@ Covered by a test above: V6.1.1, V6.2.1, V6.2.4 (built-in list), V6.3.1, V6.3.3,
 ### 8.5 Document changes and deviations
 
 TRD 5.1 (new routes), 7 (local runtime), 8.1 (as-built paragraph: parameters, links, rate limits, staff mail outside the outbox and why), 8.7 (B2 status); schema.md 3.5 (B2 table) and 4 (`auth_*` functions); AGENTS.md (state line, utilities index, commands); CLAUDE.md (status line). Deviation recorded in TRD 8.1: invitation and reset mail is sent directly over SMTP, not through the outbox, so that no link token is stored in clear text. Departure in the lockout: S-01 says five failures "start a delay"; built as a 15-minute lock of that email, shown as text from `Retry-After`.
+
+### 8.6 Security fixes after B2 review (2026-11-11). Status of every row: **security fixes after B2 review, awaiting recheck**
+
+An independent security reviewer listed candidate weaknesses in `fa65c09`. For each, a regression test was written first in `code/test/b2-security.test.ts` and run against the unfixed code (the policy numbers are written into the test, so it ran meaningfully before the fix); then the code was fixed and the test re-run.
+
+| Item | Real? | Test result on fa65c09 (before the fix) | Fix |
+|---|---|---|---|
+| 1 Disabled user acknowledges by link or keypress | Real | link POST 200 (expected 403); disable left the link open (1 unused token) | `acknowledge` refuses a disabled user for every channel (link, voice, app, operator relay), audits `escalation.ack_refused`, and the escalation keeps paging (Level 2 paged in the test); `disableUser` marks the user's open capability links used; `ackByToken` refuses a used or revoked link |
+| 2a `clientOf` trusted the first `X-Forwarded-For` hop; no header = one shared bucket | Real | rotating XFF from one peer: 401 at attempt 31 (expected 429); two peers without header shared a bucket (429 for the second peer); trusted-proxy case not handled | Direct TCP peer recorded by the new entry point `apps/web/src/serve.ts` (header `x-fixtriage-peer`, overwritten on every request); `TRUSTED_PROXIES` setting: only then is XFF read, right-most untrusted hop. Checked on `npm run dev`: 31 requests with spoofed peer and XFF headers got 30 × 401 and 1 × 429 |
+| 2b Wrong codes on enrolment and reset links unlimited | Real | sixth (correct) code after five wrong: enrol 200, reset 204 (expected 410); per-account: 401 (expected 429) | Five code attempts per link, then the link is burned; 20 code attempts on links per account per 15 minutes |
+| 3 Check-then-count race | Real | 20 concurrent wrong sign-ins: 14 verified (expected 5) | `auth_throttle_take`, `auth_backoff_take`: one call, row lock, count before verifying (migration `0009_security_round`) |
+| 4 Hard per-email lock = denial of sign-in | Real | rotating addresses: `Retry-After` 900 s (expected at most 30) | Ruling applied: capped back-off per identity (5 free, then 1 s doubling to at most 30 s), plus the per-client limit; TOTP still required. App-flow S-01 and TRD 8.1 updated, residual risk recorded in TRD 8.1 |
+| 5a Recovery codes as unsalted SHA-256 (V6.5.2) | Real | column `code_phc` did not exist | Argon2id PHC per code, salt per code; existing local rows deleted by the migration (not deployed anywhere) |
+| 5b Reset request timing and answer depend on the account | Real | the answer waited for the mail (no answer within 2 s with a blocked mailer) | Only the per-client limit runs before the answer; lookup, link and mail run in the background (`background`, `settleBackground`) |
+| 5c `email_in_use` revealed other accounts and operators | Real | 409 `email_in_use` for another account's and an operator's address (fresh address: 201) | Same 202 answer as a new invitation and a notice to that address; 409 only for an address in the owner's own account |
+| 5d "Last owner" guard claimed but not enforced | Real (race) | two owners disabling each other at once: both 200, zero enabled owners | Enabled owners locked `for update`; last owner refused (409 `last_owner`); an owner disabled meanwhile is refused (401) |
+| 5e CSRF test on every state-changing route (V3.5.1) | Control already in place (coverage gap only) | passed on fa65c09: every `POST /api/*`, `POST /ops/*` and `/auth/sign-out` route refused without the header and with a wrong one (403) | Test added; no code change |
+| 5f V6.3.1 with rotating addresses | Covered by item 4's test | see item 4 | — |
+
+Test file `b2-security.test.ts`: 15 cases. On fa65c09: **14 failed, 1 passed** (5e). After the fixes: **15 passed**. `b2-sign-in.test.ts` changed for the new behaviour (invite answers 202; the lockout case is now the capped-delay case; reset waits for background work).
+
+Commands, from `code/`, clean test database: `npm run lint` 0 problems; `npm run typecheck` 0 errors; `npm run db:reset-test` applied `0000`..`0009`; `npm run check:migrations`: order linear, drizzle-kit no pending schema change, ORM vs database diff empty; `npm test` **31 files, 293 passed, 0 failed**. One earlier full run (not from a clean database) had IT-21 fail once; it passed in three later full runs and eight runs on its own; the cause was not found and is recorded here as a possible flake.
+
+Documents changed: TRD 8.1 (rate limits, client address, disable, invite answer, recovery-code hashing, reset timing), App-flow S-01 (delay instead of lock), schema.md (3.5 B2 table, section 4 `auth_*` rows), AGENTS.md (utilities index), this section.

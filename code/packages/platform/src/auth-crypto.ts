@@ -167,7 +167,7 @@ export function newOpaqueToken(): { token: string; hash: Buffer } {
   return { token, hash: sha256(token) };
 }
 
-/** Ten single-use recovery codes of 50 random bits each, shown once; stored as SHA-256 of the normalised code. */
+/** Ten single-use recovery codes of 50 random bits each, shown once; stored as Argon2id of the normalised code (V6.5.2). */
 export function newRecoveryCodes(n = 10): string[] {
   return Array.from({ length: n }, () => {
     const s = base32Encode(randomBytes(7)).slice(0, 10);
@@ -175,8 +175,9 @@ export function newRecoveryCodes(n = 10): string[] {
   });
 }
 
-export function recoveryCodeHash(code: string): Buffer {
-  return sha256(code.toUpperCase().replace(/[^A-Z2-7]/g, ''));
+/** Upper case, separators removed: the string that is hashed and verified. */
+export function normaliseRecoveryCode(code: string): string {
+  return code.toUpperCase().replace(/[^A-Z2-7]/g, '');
 }
 
 export function looksLikeRecoveryCode(code: string): boolean {

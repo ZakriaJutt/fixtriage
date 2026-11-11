@@ -104,7 +104,8 @@ export async function describeAckToken(deps: Deps, token: string): Promise<{ add
 /** POST /a/:token: acknowledges as the person that step paged (MH-06). */
 export async function ackByToken(deps: Deps, token: string): Promise<AckResult | null> {
   const cap = await resolvers.capability(deps.database, sha256(token));
-  if (!cap || cap.purpose !== 'ack' || !cap.escalation_step_id || !cap.user_id || cap.expires_at.getTime() <= deps.clock.now().getTime()) return null;
+  // A used or revoked link (security round item 1: disabling a user revokes their links) never acts.
+  if (!cap || cap.purpose !== 'ack' || !cap.escalation_step_id || !cap.user_id || cap.used_at || cap.expires_at.getTime() <= deps.clock.now().getTime()) return null;
   return withAccount(deps.database, cap.account_id, async (tx) => {
     const [step] = await tx.select().from(tables.escalationSteps).where(eq(tables.escalationSteps.id, cap.escalation_step_id!));
     if (!step) return null;

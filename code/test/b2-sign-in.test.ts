@@ -4,7 +4,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { base32Encode, hashPassword, newTotpSecret, seal, setLogSink } from '@fixtriage/platform';
-import { inviteFirstOwner, SIGN_IN_POLICY } from '@fixtriage/services';
+import { inviteFirstOwner, settleBackground, SIGN_IN_POLICY } from '@fixtriage/services';
 import { AUTH_FUNCTIONS, sql, tables, withAccount } from '@fixtriage/db';
 import { harness, owner, q, resetData, seedAccount, seedSession, staffCall, TEST_TOTP_KEY, type Harness, type Seeded } from './helpers';
 import { authPost, codeFor, deleteMailTo, mailCount, mailTo, sessionFrom, smtpMailer, tokenFromMail, uniqueEmail } from './b2-helpers';
@@ -35,8 +35,9 @@ function email(tag: string): string {
 async function enrol(tag: string, role: 'manager' | 'owner' = 'manager', client = '198.51.100.10') {
   const to = email(tag);
   const inv = await staffCall(h, 'POST', '/api/settings/users', ownerA, { email: to, display_name: `Test ${tag}`, role });
-  expect(inv.status).toBe(201);
-  const userId = ((await inv.json()) as { user_id: string }).user_id;
+  expect(inv.status).toBe(202);
+  const [row] = await q<{ id: string }>('select id from users where email = $1', [to]);
+  const userId = row!.id;
   const mail = await mailTo(to);
   const token = tokenFromMail(mail.text, 'enrol');
   const start = await authPost(h, '/auth/enrol/start', { token, password: PASSWORD }, { client });
@@ -146,16 +147,18 @@ describe('B2 sign-in through Mailpit', () => {
     expect((await staffCall(h, 'GET', `/api/incidents/${randomUUID()}`, v.session)).status).toBe(401);
   });
 
-  it('five failed sign-ins lock the email for 15 minutes, even with the right password and code (429 with Retry-After)', async () => {
+  it('failed sign-ins start a capped delay (429 with Retry-After at most 30 s), never a lock-out; the per-client limit trips', async () => {
     const u = await enrol('ratelimit');
     h.clock.advance(60_000);
     const codes: number[] = [];
-    for (let i = 0; i < SIGN_IN_POLICY.perEmailFailures; i++) codes.push((await signIn(u.email, '000000', { password: 'not the password!' })).status);
-    expect(codes).toEqual([401, 401, 401, 401, 429]);
-    const locked = await signIn(u.email, codeFor(u.secret, h));
-    expect(locked.status).toBe(429);
-    expect(Number(locked.headers.get('retry-after'))).toBeGreaterThan(800);
-    // The per-client limit also trips for one address spraying many emails.
+    for (let i = 0; i < SIGN_IN_POLICY.freeFailures + 1; i++) codes.push((await signIn(u.email, '000000', { password: 'not the password!' })).status);
+    expect(codes).toEqual([401, 401, 401, 401, 401, 429]);
+    const delayed = await signIn(u.email, codeFor(u.secret, h));
+    expect(delayed.status).toBe(429);
+    expect(Number(delayed.headers.get('retry-after'))).toBeLessThanOrEqual(SIGN_IN_POLICY.maxDelayS);
+    h.clock.advance(SIGN_IN_POLICY.maxDelayS * 1000);
+    expect((await signIn(u.email, codeFor(u.secret, h))).status).toBe(200);
+    // The per-client limit trips for one address spraying many emails.
     const statuses: number[] = [];
     for (let i = 0; i < SIGN_IN_POLICY.perClientAttempts + 1; i++) statuses.push((await signIn(`spray-${i}@example.test`, '000000', { client: '203.0.113.9' })).status);
     expect(statuses.at(-1)).toBe(429);
@@ -165,6 +168,7 @@ describe('B2 sign-in through Mailpit', () => {
   it('reset: link through Mailpit, still needs a TOTP or recovery code, ends old sessions; link reuse and expiry refused', async () => {
     const u = await enrol('reset');
     expect((await authPost(h, '/auth/reset/request', { email: u.email })).status).toBe(202);
+    await settleBackground();
     const mail = await mailTo(u.email, { count: 2 });
     expect(mail.subject).toMatch(/reset/);
     const token = tokenFromMail(mail.text, 'reset');
@@ -179,13 +183,14 @@ describe('B2 sign-in through Mailpit', () => {
     expect((await signIn(u.email, codeFor(u.secret, h), { password: NEW })).status).toBe(200);
     // Expired link.
     await authPost(h, '/auth/reset/request', { email: u.email });
+    await settleBackground();
     const t2 = tokenFromMail((await mailTo(u.email, { count: 3 })).text, 'reset');
     h.clock.advance(SIGN_IN_POLICY.resetTtlMs + 1000);
     expect((await authPost(h, '/auth/reset/complete', { token: t2, code: u.recoveryCodes[0]!, password: NEW })).status).toBe(410);
     // Unknown address: same answer, no mail.
     const ghost = email('ghost');
     expect((await authPost(h, '/auth/reset/request', { email: ghost })).status).toBe(202);
-    await new Promise((r) => setTimeout(r, 300));
+    await settleBackground();
     expect(await mailCount(ghost)).toBe(0);
   });
 
@@ -272,6 +277,7 @@ describe('B2 sign-in through Mailpit', () => {
       u = await enrol('logs');
       await signIn(u.email, '000000');
       await authPost(h, '/auth/reset/request', { email: u.email });
+      await settleBackground();
     } finally {
       setLogSink((l) => process.stdout.write(l + '\n'), 'warn');
     }
@@ -293,7 +299,8 @@ describe('B2 sign-in through Mailpit', () => {
     // A session cannot be created for an invited user who has not enrolled.
     const to = email('noenrol');
     const r = await staffCall(h, 'POST', '/api/settings/users', ownerA, { email: to, display_name: 'N', role: 'manager' });
-    const id = ((await r.json()) as { user_id: string }).user_id;
+    expect(r.status).toBe(202);
+    const [{ id }] = (await q<{ id: string }>('select id from users where email = $1', [to])) as [{ id: string }];
     await expect(h.deps.database.pool.query('select auth_create_session($1, null, $2, $3)', [id, Buffer.alloc(32, 1), Buffer.alloc(32, 2)])).rejects.toThrow(/not eligible/);
   });
 });

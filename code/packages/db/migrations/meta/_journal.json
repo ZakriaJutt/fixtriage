@@ -64,6 +64,13 @@
       "when": 1794360377986,
       "tag": "0008_b2_sign_in",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794392388155,
+      "tag": "0009_security_round",
+      "breakpoints": true
     }
   ]
 }

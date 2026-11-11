@@ -9,7 +9,7 @@ export function serve(h: Harness): Promise<{ url: string; close(): Promise<void>
     for await (const c of req) chunks.push(c as Buffer);
     const r = route(h.handlers, req.method ?? 'GET', req.url ?? '/');
     if (!r) return void res.writeHead(404).end();
-    const out = await r.handler(new Request(`http://127.0.0.1${req.url}`, { method: req.method, headers: req.headers as Record<string, string>, ...(chunks.length ? { body: Buffer.concat(chunks) } : {}) }), r.params);
+    const out = await r.handler(new Request(`http://127.0.0.1${req.url}`, { method: req.method, headers: req.headers as Record<string, string>, ...(chunks.length ? { body: Buffer.concat(chunks) } : {}) }), r.params, req.socket.remoteAddress);
     res.writeHead(out.status, Object.fromEntries(out.headers));
     res.end(Buffer.from(await out.arrayBuffer()));
   });

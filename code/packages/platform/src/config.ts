@@ -14,6 +14,8 @@ const schema = z
     CHECKIN_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
     WORKER_POLL_MS: z.coerce.number().int().positive().default(1_000),
     PROVIDERS: z.enum(['fake']).default('fake'),
+    // Security round item 2: our own load balancer or proxy addresses, comma-separated. Empty: the TCP peer is the client.
+    TRUSTED_PROXIES: z.string().default('').transform((v) => v.split(',').map((x) => x.trim()).filter(Boolean)),
     // B2 sign-in (TRD 8.1): 32-byte base64 key for the stored TOTP secrets. Local value lives in the gitignored .env.
     TOTP_ENCRYPTION_KEY: z.string().refine((v) => Buffer.from(v, 'base64').length === 32, 'must be 32 bytes, base64'),
     // B2 staff mail: SMTP only. Local default is Mailpit (127.0.0.1:1025, no authentication).

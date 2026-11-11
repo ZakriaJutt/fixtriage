@@ -69,11 +69,13 @@ export function tokenFromMail(text: string, page: 'enrol' | 'reset'): string {
 export const codeFor = (secretB32: string, h: Harness, offsetSteps = 0) => totpCode(base32Decode(secretB32), totpStep(h.clock.now()) + offsetSteps);
 
 /** JSON POST to a pre-session auth route from a given client address. */
-export async function authPost(h: Harness, path: string, body: unknown, opts: { client?: string; cookie?: string; csrf?: string; contentType?: string } = {}): Promise<Response> {
-  const headers: Record<string, string> = { 'content-type': opts.contentType ?? 'application/json', 'x-forwarded-for': opts.client ?? '198.51.100.1' };
+/** JSON POST to a pre-session auth route. `client` is the direct peer address; `xff` an optional X-Forwarded-For header. */
+export async function authPost(h: Harness, path: string, body: unknown, opts: { client?: string; xff?: string; cookie?: string; csrf?: string; contentType?: string } = {}): Promise<Response> {
+  const headers: Record<string, string> = { 'content-type': opts.contentType ?? 'application/json' };
+  if (opts.xff) headers['x-forwarded-for'] = opts.xff;
   if (opts.cookie) headers.cookie = opts.cookie;
   if (opts.csrf) headers['x-csrf-token'] = opts.csrf;
-  return call(h, 'POST', path, new Request(`http://internal${path}`, { method: 'POST', headers, body: JSON.stringify(body) }));
+  return call(h, 'POST', path, new Request(`http://internal${path}`, { method: 'POST', headers, body: JSON.stringify(body) }), opts.client ?? '198.51.100.1');
 }
 
 /** Session cookie pair from a sign-in response, in the shape staffCall() takes. */
