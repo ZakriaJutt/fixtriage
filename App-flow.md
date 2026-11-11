@@ -130,6 +130,7 @@ Each block: story · entry · inputs · visible · actions → destination · ac
 | Onboarding | S-01 → S-02 → S-11 → S-14 → S-09 (test pages) → S-10 → S-02 go-live → S-03 |
 | Primary, routine | Tenant message → S-03 → S-04 → S-07 approve → vendor S-08 → S-03 closed → S-13 export |
 | Primary, urgent after hours | Tenant message → page → S-06 → S-01 → S-05 outcome → S-07 approve → S-08 |
+| After hours, not paged at once (PRD EP-10a) | Tenant message with no rule or candidate floor → fixed auto-reply with "If this is an emergency (flood, no heat, gas, fire, no power, locked out), reply URGENT" (the after-hours safety reply, or the separate `tenant.urgent_prompt` inside the 30-minute window); no screen. Tenant replies `URGENT` (any case, common misspellings, `EMERGENCY`) → request raised to `urgent` by rule `ur.tenant_urgent` → page → S-06 → S-05, as the urgent path. No reply → the request stays as decided and appears in the next-morning list (MH-13). An opted-out sender (`STOP`) gets no prompt by SMS and is paged as cannot-text (S-04 "phone the tenant"). |
 | Review and correction | S-12 list (a) → S-04 correct → S-12 report |
 | Recovery, failed dispatch | Routine: S-07 "Undelivered" → next vendor review step → Sent, or "I phoned them". Emergency: page (reopened escalation) → S-06 or S-05 acknowledge → S-07 next vendor review step, or "I phoned them" |
 | Sign-out | S-14 or header menu → S-01 |

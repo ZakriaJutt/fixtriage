@@ -45,7 +45,7 @@ describe('IT-04 rule beats model', () => {
     expect(r).toMatchObject({ tier: 'urgent', tier_source: 'rule' });
     const cls = await q<{ kind: string; proposed_tier: string; rule_set_version: number | null; matched_rule: string | null }>('select kind, proposed_tier, rule_set_version, matched_rule from classifications order by created_at, kind desc');
     expect(cls).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'rule', proposed_tier: 'urgent', rule_set_version: 3, matched_rule: 'ur.no_heat' }),
+      expect.objectContaining({ kind: 'rule', proposed_tier: 'urgent', rule_set_version: 4, matched_rule: 'ur.no_heat' }),
       expect.objectContaining({ kind: 'model', proposed_tier: 'routine' }),
     ]));
     expect(pagesTo(h, s.phones.lee)).toHaveLength(2);

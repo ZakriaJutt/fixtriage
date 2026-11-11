@@ -109,6 +109,7 @@ describe('IT-10 cross-account isolation', () => {
       due_jobs: ['id', 'account_id', 'run_at', 'kind'],
       due_undecided: ['id', 'account_id', 'due_at'],
       job_health: ['dead_jobs'],
+      inbound_health: ['oldest_without_request', 'without_request'],
       dead_jobs: ['id', 'account_id', 'kind', 'attempts', 'last_error', 'created_at'],
     };
     for (const [v, cols] of Object.entries(views)) {

@@ -20,7 +20,10 @@ function ec(phone: string | null): string {
   return phone ? `your landlord's emergency contact number, ${phone}` : `your landlord's emergency contact number`;
 }
 
-/** MH-02 safety reply. After hours (by the clock) the EP-10 variant is used. */
+/** EP-10a: the one keyword and the emergency examples every after-hours auto-reply carries (lead ruling, round 3). */
+export const URGENT_KEYWORD_LINE = 'If this is an emergency (flood, no heat, gas, fire, no power, locked out), reply URGENT';
+
+/** MH-02 safety reply. After hours (by the clock) the EP-10 variant is used (v2 adds the URGENT line, EP-10a). */
 export function renderSafetyReply(p: SafetyReplyParams): Rendered {
   const core =
     `We received your message. If there is fire, smoke or anyone is in danger, call 911 now. ` +
@@ -29,11 +32,23 @@ export function renderSafetyReply(p: SafetyReplyParams): Rendered {
   if (p.afterHours) {
     return {
       templateId: 'safety_reply.after_hours',
-      templateVersion: 1,
-      body: `${core} The office is closed now. If this cannot wait, reply URGENT or call ${ec(p.emergencyContactPhone)}.`,
+      templateVersion: 2,
+      body: `${core} The office is closed now. ${URGENT_KEYWORD_LINE} or call ${ec(p.emergencyContactPhone)}.`,
     };
   }
   return { templateId: 'safety_reply.standard', templateVersion: 1, body: core };
+}
+
+/**
+ * EP-10a URGENT prompt: after hours, a tenant message that does not page at once and did not get the safety reply
+ * (30-minute window, MH-02) gets this fixed text. Selected by the clock and rule hits only; no model.
+ */
+export function renderUrgentPrompt(p: { emergencyContactPhone: string | null }): Rendered {
+  return {
+    templateId: 'tenant.urgent_prompt',
+    templateVersion: 1,
+    body: `We received your message. The office is closed now. ${URGENT_KEYWORD_LINE}. If anyone is in danger, call 911. You can also call ${ec(p.emergencyContactPhone)}.`,
+  };
 }
 
 /** MH-15 purpose notice; the second message of the first exchange, carrying the opt-out line. */
@@ -108,6 +123,8 @@ export const ALL_TENANT_TEMPLATE_SAMPLES = (): Rendered[] => [
   renderSafetyReply({ afterHours: true, emergencyContactPhone: '+16045550100', gasEmergencyPhone: '+18006639911' }),
   renderSafetyReply({ afterHours: true, emergencyContactPhone: null, gasEmergencyPhone: '+18006639911' }),
   renderPurposeNotice({ accountName: 'Example Realty', privacyUrl: 'https://example.test/privacy' }),
+  renderUrgentPrompt({ emergencyContactPhone: '+16045550100' }),
+  renderUrgentPrompt({ emergencyContactPhone: null }),
   renderStillTrying({ emergencyContactPhone: '+16045550100' }),
   renderAcknowledged(),
 ];

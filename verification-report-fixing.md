@@ -305,3 +305,42 @@ Edits made after that retest (**fixed after retest**, not re-reviewed), code com
 Commands, from `code/`, clean test database (`npm run db:reset-test` applied `0000`..`0005`): `npm run lint` 0 problems; `npm run typecheck` 0 errors; `npm run check:migrations`: order linear, drizzle-kit no pending change, ORM vs database diff empty; `npm test` **25 files, 167 passed, 0 failed**. Reviewer's round-2 script `fixtriage-b1-adversarial.mts` (not edited): **41/41 passed** (it reported 40/42 at `9edfd54`).
 
 B1-010 stays open as the reviewer's note (no ASVS 5.0.0 IDs cited; no compliance claimed). Documents changed in this round: PRD (UR-3 safety-candidate floor), TRD (5.1 `/ops/*`, 8.5 "Not AI"), schema.md (3.5 round-2 table, 4 `dead_jobs`), AGENTS.md (utilities index), this file. Not re-reviewed.
+
+### 7.7 Retest (round 3) and round-3 fix (2026-11-11)
+
+Reviewer's round-3 verdicts from `_coordination/review/fixtriage-b1-verdicts.json`, copied unchanged (retest of HEAD `bb7ba5b`, review `fixtriage-b1-round3.md`):
+
+```json
+{
+  "B1-001": "Closed, part open: an operator can dismiss a dead intake.process job (new route /ops/jobs/:id/dismiss); the inbound message then has no request, is never paged and /readyz is green (round 3 R5, 'gas smell in the hallway' at 23:30: 0 pages after 20 min). See B1-011",
+  "B1-002": "Closed",
+  "B1-003": "Closed, part open: the four burst phrasings now page (urgent by rule), and an after-hours safety candidate cannot be closed by a model 'routine' at 0.80, 0.95 or 1.0; but 9 of 28 fresh emergency phrasings get no floor after hours (e.g. 'hydro is out in my suite only', 'whole apartment went dark', 'kitchen is on fyer', 'wires are arcing behind the dryer', 'elevator stopped with me in it'), 22 of 28 depend on the model alone in business hours, and the candidate layer pages 12 of 40 ordinary routine messages after hours",
+  "B1-004": "Closed",
+  "B1-005": "Closed",
+  "B1-006": "Closed",
+  "B1-007": "Closed",
+  "B1-008": "Closed",
+  "B1-009": "Closed",
+  "B1-010": "Still open: reviewer note only (no ASVS 5.0.0 IDs cited); unchanged by design"
+}
+```
+
+Edits made after that retest. Status of every row: **fixed after round-3 retest, awaiting recheck** (not re-reviewed).
+
+| Item | Fix | Regression test (under `code/`) |
+|---|---|---|
+| B1-011 major: dismissing a dead `intake.process` job left a 23:30 "gas smell" message with no request, no page and a green `/readyz` | `actOnDeadJob` dismiss of a dead `intake.process` or `classify` job first runs `materialiseRequest` in the same transaction: the full deterministic intake in a savepoint, else a minimal request from the rules alone; a request still `pending` is decided `uncertain` (the model job is gone, UR-3) and EP-8 applies, so after hours it pages at once (`uncertain` at minimum). If the message would still have no request the dismissal is refused (409) and the job stays dead; it can only be requeued. The response and the audit row carry `request_id`. New `/readyz` check `inbound_without_request` (view `inbound_health`): red while a stored message older than 60 s has no request and no carrier keyword or vendor-reply marker (`inbound_messages.handled_as`), whatever happened to its job. Migration `0006_round3_b1_011` | `apps/web/test/fix-round3.test.ts` B1-011 (7 cases): the 23:30 gas case (dismiss 200, life_safety by rule, Level 1 paged, `/readyz` green, audit `materialised: intake`); no-rule message with the model down after hours -> `uncertain`, paged; dead classify job of a pending request -> decided at once, paged; business hours -> `uncertain`, Level 1 at 15 min; intake failing again -> minimal request, paged; job cleared outside the route -> `/readyz` red after 60 s, green once the request exists; STOP, HELP and a vendor reply do not turn it red. IT-10 view column list includes `inbound_health` |
+| B1-003 part (9/28 fresh emergencies with no floor, 12/40 routine messages paged after hours) | **Net that does not depend on the lists (lead ruling, pending owner confirmation, PRD EP-10a):** after hours every tenant message that does not page at once gets a fixed auto-reply, no model, with "If this is an emergency (flood, no heat, gas, fire, no power, locked out), reply URGENT": the after-hours safety reply (template v2) carries the line, and a message inside the 30-minute safety-reply window gets the separate prompt `tenant.urgent_prompt` (outbound purpose `urgent_prompt`), enqueued in T1, so a dead intake job cannot stop it. A reply `URGENT` (case, punctuation, filler words, one-letter misspellings, `EMERGENCY`) is rule `ur.tenant_urgent`: `urgent`, paged at once, appended to the open request or opening a new one. STOP as designed (FD-7): no SMS prompt to an opted-out sender, who is paged as cannot-text. **Rule set v4** (v1-v3 frozen, unchanged checksums): stems and pairs for the reviewer's nine misses (fyer, arcing, geyser, sprinkler, rain+inside, up+drain, nothing+blow, went+dark, hydro out/off/down, no hydro, elevator stop/stuck) and phrases that give them their labelled tier by rule; obvious false pages quieted by context words (door, off, out, not, wall, window, went, open, inside pair only with a non-context weak cue), quiet words (stiff, loose, draft, book, weekdays and similar) and three narrow benign idioms (bulb "burnt out", fixture "fell off", heat "too warm"). No safety stem removed or demoted (tested) | `packages/core/test/ut-01-rules-v4.test.ts` (33 cases): reviewer's 28 all have an after-hours floor; the nine reach their labelled tier in and out of hours; of the 40 routine only the chirping smoke detector pages; held-out limits; v3 stems kept and strong; v3 behaviour frozen; six quieting counter-examples still floor; 11 URGENT variants. `fix-round3.test.ts` EP-10a (15 cases): safety reply carries the line, the later message gets the prompt, no prompt when it pages or in business hours, STOP, 11 reply variants after a model `routine` -> urgent and paged, reply after 40 min -> new urgent request paged. UT-01 (286 items) and the stem-layer test unchanged and passing |
+
+**Known limits, measured on a small synthetic set** (PRD SM-09; after hours, rules plus candidate floor, no model):
+
+| Set | Miss rate (no floor) | False-page rate (routine paged at once) | Labelled tier by rule | Business hours, emergency with no floor |
+|---|---|---|---|---|
+| Developer's held-out set, written before the v4 tuning and not used for it (`packages/core/test/fixtures/holdout-set.ts`, 20 + 20) | 1/20 (5%); v3: 2/20 | 2/20 (10%); v3: 4/20 | 14/20 | 6/20 |
+| Reviewer's round-3 set (used for tuning, so not independent; 28 + 40) | 0/28; v3: 9/28 | 1/40 (the chirping smoke detector, kept on purpose); v3: 12/40 | 18/28 | 11/28 (v3: 22/28) |
+
+Both sets are small and synthetic, written by two people; the rates are indicative, not a measurement of real traffic. The remaining after-hours misses still get the EP-10a URGENT prompt. Targets for both rates stay with the owner and the Phase 0 labelled set (the reviewer's retest condition for B1-003).
+
+Commands, from `code/`, clean test database: `npm run lint` 0 problems; `npm run typecheck` 0 errors; `npm run db:reset-test` applied `0000`..`0006`; `npm run check:migrations`: order linear, drizzle-kit no pending schema change, ORM vs database diff empty; `npm test` **27 files, 222 passed, 0 failed**; `make verify` (lint, typecheck, reset, test) the same 222/222. Reviewer's scripts (not edited): `fixtriage-b1-round3.mts` **17/17** (was 14/17; R2a and R3a use the tuning set), `fixtriage-b1-adversarial.mts` **41/41**.
+
+B1-010 stays open as the reviewer's note. Documents changed in this round: PRD (UR-2 URGENT variants, UR-3 v4 note, EP-10a, SM-09), App-flow (section 7 path "After hours, not paged at once"), TRD (5.1 `/readyz` and `/ops/*` dismiss, 6.3 `intake.process`, 8.5 "Not AI"), schema.md (3.5 round-3 table, `outbound_messages.purpose`, 4 `inbound_health`), AGENTS.md (utilities index), this file. Awaiting recheck.

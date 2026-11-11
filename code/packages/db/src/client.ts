@@ -101,10 +101,13 @@ export async function oldestDue(database: Database, now: Date): Promise<Record<P
   return r.rows[0];
 }
 
-/** Platform-level health counts for /readyz: dead jobs (B1-001) and uncleared unrouted messages (B1-004). No IDs. */
-export async function healthCounts(database: Database): Promise<{ deadJobs: number; unrouted: number }> {
+/**
+ * Platform-level health counts for /readyz: dead jobs (B1-001), uncleared unrouted messages (B1-004) and the oldest
+ * stored inbound message with no request and no keyword/vendor-reply reason (B1-011, view inbound_health). No IDs.
+ */
+export async function healthCounts(database: Database): Promise<{ deadJobs: number; unrouted: number; oldestWithoutRequest: Date | null }> {
   const r = await database.pool.query(
-    'select (select dead_jobs from job_health) as dead, (select count(*)::int from unrouted_inbound where cleared_at is null) as unrouted',
+    'select (select dead_jobs from job_health) as dead, (select count(*)::int from unrouted_inbound where cleared_at is null) as unrouted, (select oldest_without_request from inbound_health) as orphan',
   );
-  return { deadJobs: Number(r.rows[0].dead), unrouted: Number(r.rows[0].unrouted) };
+  return { deadJobs: Number(r.rows[0].dead), unrouted: Number(r.rows[0].unrouted), oldestWithoutRequest: r.rows[0].orphan ?? null };
 }

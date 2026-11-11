@@ -421,7 +421,7 @@ export const outboundMessages = pgTable(
     unique('outbound_messages_account_id_id_uq').on(t.accountId, t.id),
     unique('outbound_messages_account_dedupe_uq').on(t.accountId, t.dedupeKey),
     foreignKey({ name: 'outbound_messages_approved_by_fk', columns: [t.accountId, t.approvedBy], foreignColumns: [users.accountId, users.id] }),
-    oneOf('outbound_messages_purpose_values', t.purpose, ['safety_reply', 'notice', 'tenant_update', 'follow_up', 'page_sms', 'page_voice', 'dispatch', 'digest', 'test_page', 'probe']),
+    oneOf('outbound_messages_purpose_values', t.purpose, ['safety_reply', 'urgent_prompt', 'notice', 'tenant_update', 'follow_up', 'page_sms', 'page_voice', 'dispatch', 'digest', 'test_page', 'probe']),
     oneOf('outbound_messages_channel_values', t.channel, ['sms', 'voice', 'email']),
     oneOf('outbound_messages_status_values', t.status, ['pending', 'sending', 'sent', 'delivered', 'undelivered', 'failed', 'unknown']),
     check('outbound_messages_dispatch_approved', sql`${t.purpose} <> 'dispatch' or ${t.approvedBy} is not null`),
@@ -453,6 +453,8 @@ export const inboundMessages = pgTable(
     correlationId: uuid('correlation_id').notNull(),
     rawPayload: jsonb('raw_payload'),
     safetyReplyId: uuid('safety_reply_id'),
+    /** B1-011: a stored message that legitimately has no request (a vendor's dispatch reply); /readyz counts the rest. */
+    handledAs: text('handled_as'),
   },
   (t) => [
     unique('inbound_messages_account_id_id_uq').on(t.accountId, t.id),
@@ -463,6 +465,7 @@ export const inboundMessages = pgTable(
     foreignKey({ name: 'inbound_messages_safety_reply_fk', columns: [t.accountId, t.safetyReplyId], foreignColumns: [outboundMessages.accountId, outboundMessages.id] }),
     index('inbound_messages_sender_idx').on(t.accountId, t.fromAddress, t.receivedAt.desc()),
     oneOf('inbound_messages_keyword_values', t.keyword, ['stop', 'start', 'help']),
+    oneOf('inbound_messages_handled_as_values', t.handledAs, ['vendor_reply']),
     isolation('inbound_messages'),
   ],
 );

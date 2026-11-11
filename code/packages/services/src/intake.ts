@@ -10,6 +10,7 @@ import {
   pickContacts,
   renderPurposeNotice,
   renderSafetyReply,
+  renderUrgentPrompt,
   intakeFloor,
   CURRENT_RULES,
   suggestsDuplicate,
@@ -96,6 +97,7 @@ export async function ingestInbound(deps: Deps, m: InboundInput): Promise<Ingest
     if (keyword === 'help') return { status: 'stored', accountId: ch.account_id, inboundId } as const; // provider answers HELP
 
     if (m.kind === 'sms' && (await handleVendorReply(tx, deps, ch.account_id, m.from, m.body, inboundId))) {
+      await tx.update(tables.inboundMessages).set({ handledAs: 'vendor_reply' }).where(eq(tables.inboundMessages.id, inboundId));
       return { status: 'stored', accountId: ch.account_id, inboundId } as const;
     }
 
@@ -107,15 +109,16 @@ export async function ingestInbound(deps: Deps, m: InboundInput): Promise<Ingest
         and created_at > ${new Date(m.receivedAt.getTime() - EP.safetyReplyWindowSeconds * 1000)} and status not in ('failed', 'undelivered') limit 1`);
     const optedOut = m.kind === 'sms' && (await smsOptedOut(tx, m.from, m.receivedAt));
     let safetyReplyId: string | null = null;
+    let property: { emergencyContactPhone: string | null; gasEmergencyPhone: string | null } | null = null;
+    if (contact) {
+      const p = await tx.execute(sql`select p.emergency_contact_phone, p.gas_emergency_phone from units u join properties p on p.id = u.property_id where u.id = ${contact.unit_id}`);
+      const row = p.rows[0] as { emergency_contact_phone: string | null; gas_emergency_phone: string | null } | undefined;
+      if (row) property = { emergencyContactPhone: row.emergency_contact_phone, gasEmergencyPhone: row.gas_emergency_phone };
+    }
+    const contacts = pickContacts(account, property);
+    const target = m.kind === 'email' ? { channel: 'email' as const, to: m.from } : !optedOut ? { channel: 'sms' as const, to: m.from } : contact?.email ? { channel: 'email' as const, to: contact.email } : null;
     if (ruleHit || recent.rows.length === 0) {
-      let property: { emergencyContactPhone: string | null; gasEmergencyPhone: string | null } | null = null;
-      if (contact) {
-        const p = await tx.execute(sql`select p.emergency_contact_phone, p.gas_emergency_phone from units u join properties p on p.id = u.property_id where u.id = ${contact.unit_id}`);
-        const row = p.rows[0] as { emergency_contact_phone: string | null; gas_emergency_phone: string | null } | undefined;
-        if (row) property = { emergencyContactPhone: row.emergency_contact_phone, gasEmergencyPhone: row.gas_emergency_phone };
-      }
-      const rendered = renderSafetyReply({ afterHours: ah, ...pickContacts(account, property) });
-      const target = m.kind === 'email' ? { channel: 'email' as const, to: m.from } : !optedOut ? { channel: 'sms' as const, to: m.from } : contact?.email ? { channel: 'email' as const, to: contact.email } : null;
+      const rendered = renderSafetyReply({ afterHours: ah, ...contacts });
       if (target) {
         safetyReplyId = await enqueueOutbound(tx, { accountId: ch.account_id, purpose: 'safety_reply', channel: target.channel, to: target.to, rendered, dedupeKey: `safety:${inboundId}`, at: now });
         if (target.channel === 'sms') {
@@ -125,8 +128,16 @@ export async function ingestInbound(deps: Deps, m: InboundInput): Promise<Ingest
         await tx.update(tables.inboundMessages).set({ safetyReplyId }).where(eq(tables.inboundMessages.id, inboundId));
       }
     }
+    // EP-10a (lead ruling, round 3, pending owner confirmation): phrase lists will never be complete, so after hours a
+    // message that does not page at once (no rule or candidate floor, sender textable) and did not just get the safety
+    // reply, which carries the same line, gets the fixed URGENT prompt. No model; a reply URGENT is rule ur.tenant_urgent.
+    let urgentPrompt = false;
+    if (ah && safetyReplyId === null && !optedOut && target && intakeFloor(rules, ah) === null) {
+      await enqueueOutbound(tx, { accountId: ch.account_id, purpose: 'urgent_prompt', channel: target.channel, to: target.to, rendered: renderUrgentPrompt(contacts), dedupeKey: `urgent_prompt:${inboundId}`, at: now });
+      urgentPrompt = true;
+    }
     await enqueueJob(tx, ch.account_id, 'intake.process', { inboundId }, `intake:${inboundId}`, now);
-    await audit(tx, { accountId: ch.account_id, actorKind: 'provider', action: 'inbound.stored', objectType: 'inbound_message', objectId: inboundId, after: { safety_reply: safetyReplyId !== null, rule_hit: ruleHit, after_hours: ah, opted_out: optedOut } }, now);
+    await audit(tx, { accountId: ch.account_id, actorKind: 'provider', action: 'inbound.stored', objectType: 'inbound_message', objectId: inboundId, after: { safety_reply: safetyReplyId !== null, urgent_prompt: urgentPrompt, rule_hit: ruleHit, after_hours: ah, opted_out: optedOut } }, now);
     return { status: 'stored', accountId: ch.account_id, inboundId } as const;
   });
 }
@@ -285,6 +296,56 @@ export async function triageTimeout(tx: Tx, deps: Deps, accountId: string, reque
   if (human.rows.length) return;
   if (escalationNeed({ ...r, afterHours: true }) !== 'now') return;
   await ensureIncident(tx, deps, accountId, r, 'unknown', r.openedAt, 'uncertain_timeout');
+}
+
+/**
+ * B1-011: before an operator clears a dead intake or classify job, the stored message gets its request. The full
+ * deterministic intake runs in a savepoint; if it fails again (the reason the job died), a minimal request is
+ * created from the rules alone. The model job is gone, so a request still `pending` is decided `uncertain` now
+ * (UR-3) and EP-8 applies: after hours it pages at once, in business hours at 15 minutes (sweep). No model call.
+ */
+export async function materialiseRequest(tx: Tx, deps: Deps, accountId: string, inboundId: string, intake: typeof processIntake = processIntake): Promise<{ requestId: string | null; via: 'existing' | 'intake' | 'minimal' | 'none' }> {
+  const now = deps.clock.now();
+  const read = async () => (await tx.select().from(tables.inboundMessages).where(eq(tables.inboundMessages.id, inboundId)))[0];
+  let msg = await read();
+  if (!msg || msg.keyword || msg.handledAs) return { requestId: null, via: 'none' };
+  let via: 'existing' | 'intake' | 'minimal' = 'existing';
+  if (!msg.requestId) {
+    try {
+      await tx.transaction((sp) => intake(sp, deps, accountId, inboundId));
+      via = 'intake';
+    } catch (e) {
+      serviceLog.error('intake.materialise_fallback', { inbound_id: inboundId, error: e instanceof Error ? e.name : 'unknown' });
+      const account = await loadAccount(tx, accountId);
+      const ah = afterHours(account, msg.receivedAt);
+      let floor: Tier | null = null;
+      let ruleHit = false;
+      try {
+        const rules = evaluateRules({ text: msg.body, hasMedia: msg.mediaCount > 0, afterHours: ah });
+        floor = intakeFloor(rules, ah);
+        ruleHit = rules.ruleTier !== null;
+      } catch {
+        floor = null;
+      }
+      const [created] = await tx
+        .insert(tables.requests)
+        .values({ accountId, tier: floor ?? 'uncertain', tierSource: ruleHit ? 'rule' : 'uncertainty', afterHours: ah, openedAt: msg.receivedAt, createdAt: now, updatedAt: now })
+        .returning({ id: tables.requests.id });
+      await tx.update(tables.inboundMessages).set({ requestId: created!.id }).where(eq(tables.inboundMessages.id, inboundId));
+      await audit(tx, { accountId, actorKind: 'system', action: 'request.opened', objectType: 'request', objectId: created!.id, after: { tier: floor ?? 'uncertain', minimal: true, after_hours: ah } }, now);
+      via = 'minimal';
+    }
+    msg = await read();
+  }
+  if (!msg?.requestId) return { requestId: null, via: 'none' };
+  let [r] = await tx.select().from(tables.requests).where(eq(tables.requests.id, msg.requestId));
+  if (!r) return { requestId: null, via: 'none' };
+  if (r.tierSource === 'pending') {
+    [r] = await tx.update(tables.requests).set({ tier: 'uncertain', tierSource: 'uncertainty', updatedAt: now, version: sql`${tables.requests.version} + 1` }).where(eq(tables.requests.id, r.id)).returning();
+    await audit(tx, { accountId, actorKind: 'system', action: 'request.decided_on_job_clear', objectType: 'request', objectId: r!.id, after: { tier: 'uncertain' } }, now);
+  }
+  if (r!.state !== 'closed') await applyEscalationNeed(tx, deps, accountId, r!, 'unknown', msg.receivedAt);
+  return { requestId: r!.id, via };
 }
 
 /** Exposed for the worker job runner. */

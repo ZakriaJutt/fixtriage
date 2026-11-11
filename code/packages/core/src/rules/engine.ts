@@ -1,12 +1,12 @@
 // Deterministic rule engine (MH-03, UR-1..UR-3, UR-7). Pure: no I/O, no clock.
 import { maxTier, tierRank, type Tier } from '../tiers';
 import { ENGLISH_VOCAB, type HazardClass, type Phrase, type Rule } from './lexicon-v1';
-import { RULES_V3 } from './lexicon-v3';
+import { RULES_V4 } from './lexicon-v4';
 import { safetyCandidate } from './safety-candidate';
 
 /** Current rule set. v1 is kept for the decisions stored with it; v2 adds B1-003 phrasings and the v2 normaliser. */
-export const RULE_SET_VERSION = 3;
-export const CURRENT_RULES: Rule[] = RULES_V3;
+export const RULE_SET_VERSION = 4;
+export const CURRENT_RULES: Rule[] = RULES_V4;
 
 export interface RuleInput {
   text: string | null;
@@ -121,7 +121,7 @@ function phraseMatches(p: Phrase, tokens: string[]): boolean {
 }
 
 const VOCAB = new Set<string>(ENGLISH_VOCAB);
-for (const r of RULES_V3) for (const p of r.phrases) for (const t of p.tokens) if (!t.endsWith('*')) VOCAB.add(t);
+for (const r of RULES_V4) for (const p of r.phrases) for (const t of p.tokens) if (!t.endsWith('*')) VOCAB.add(t);
 
 function isLexiconLanguage(text: string, tokens: string[]): boolean {
   // Any letter outside the Latin script means the text is outside the lexicon's language.

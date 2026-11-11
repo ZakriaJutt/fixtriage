@@ -32,6 +32,10 @@ export async function readiness(deps: Pick<Deps, 'database' | 'clock' | 'storage
     const hc = await healthCounts(deps.database);
     checks.dead_jobs = { ok: hc.deadJobs === 0 };
     checks.unrouted_inbound = { ok: hc.unrouted === 0 };
+    // B1-011: a stored message with no request (and no keyword or vendor-reply reason) beyond the age bound means a
+    // tenant's report may be lost with its job; red until the request exists, whatever happened to the job.
+    const orphanAge = hc.oldestWithoutRequest ? Math.round((now.getTime() - new Date(hc.oldestWithoutRequest).getTime()) / 1000) : null;
+    checks.inbound_without_request = { ok: orphanAge === null || orphanAge <= READY_MAX_AGE_SECONDS, age_seconds: orphanAge };
   } catch {
     checks.database = { ok: false };
   }

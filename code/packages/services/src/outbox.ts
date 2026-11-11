@@ -7,7 +7,7 @@ import { audit, correlationId, serviceLog, withAccount, type Deps } from './cont
 import { onPageChannelFailed } from './escalation';
 import { onDispatchFailed } from './dispatch';
 
-export type Purpose = 'safety_reply' | 'notice' | 'tenant_update' | 'follow_up' | 'page_sms' | 'page_voice' | 'dispatch' | 'digest' | 'test_page' | 'probe';
+export type Purpose = 'safety_reply' | 'urgent_prompt' | 'notice' | 'tenant_update' | 'follow_up' | 'page_sms' | 'page_voice' | 'dispatch' | 'digest' | 'test_page' | 'probe';
 
 export interface EnqueueInput {
   accountId: string;
@@ -60,7 +60,7 @@ export async function enqueueOutbound(tx: Tx, m: EnqueueInput): Promise<string> 
   return existing!.id;
 }
 
-const TENANT_PURPOSES: Purpose[] = ['safety_reply', 'notice', 'tenant_update', 'follow_up'];
+const TENANT_PURPOSES: Purpose[] = ['safety_reply', 'urgent_prompt', 'notice', 'tenant_update', 'follow_up'];
 
 async function senderFor(tx: Tx, accountId: string, purpose: string, channel: string, deps: Deps): Promise<string> {
   if (TENANT_PURPOSES.includes(purpose as Purpose) || channel === 'email') {
