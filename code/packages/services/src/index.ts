@@ -11,3 +11,5 @@ export * from './staff';
 export * from './tenant';
 export * from './decide';
 export * from './ops';
+export * from './auth';
+export * from './attachments';

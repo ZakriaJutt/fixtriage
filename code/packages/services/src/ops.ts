@@ -5,10 +5,9 @@
 // job whose message would still have no request cannot be cleared (409), only requeued.
 import { and, eq, resolvers, tables } from '@fixtriage/db';
 import { sha256 } from '@fixtriage/platform';
-import { timingSafeEqual } from 'node:crypto';
 import { audit, ConflictError, NotFoundError, withAccount, type Deps } from './context';
 import { materialiseRequest } from './intake';
-import { AuthError } from './staff';
+import { AuthError, checkCsrf, touchSession } from './staff';
 
 export interface OperatorPrincipal {
   operatorId: string;
@@ -23,10 +22,8 @@ export async function authenticateOperator(deps: Pick<Deps, 'database'>, session
   const s = await resolvers.session(deps.database, sha256(sessionToken));
   if (!s) throw new AuthError('no_session');
   if (!s.operator_id || s.role !== 'operator') throw new OperatorOnlyError('operator role required');
-  if (stateChanging) {
-    const got = csrfHeader ? sha256(csrfHeader) : null;
-    if (!got || got.length !== s.csrf_token_hash.length || !timingSafeEqual(got, s.csrf_token_hash)) throw new AuthError('csrf');
-  }
+  if (stateChanging) checkCsrf(s.csrf_token_hash, csrfHeader);
+  await touchSession(deps, sessionToken);
   return { operatorId: s.operator_id };
 }
 

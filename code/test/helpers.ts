@@ -3,7 +3,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { createDatabase, ownerUrl, appUrl, withAccount, tables, type Database } from '@fixtriage/db';
-import { FakeClassifier, FakeClock, FakeMessagingProvider, FakeObjectStorage, sha256, twilioSignature } from '@fixtriage/platform';
+import { FakeClassifier, FakeClock, FakeMailer, FakeMessagingProvider, FakeObjectStorage, sha256, twilioSignature, type Mailer, type ObjectStorage } from '@fixtriage/platform';
 import { processClassifyJobs, processDueJobs, processOutbox, retryPendingStatusEvents, sweepUndecided, tickEscalations, watchDispatches, type Deps } from '@fixtriage/services';
 import { createHandlers, route, SESSION_COOKIE, CSRF_HEADER, type WebDeps } from '../apps/web/src/handlers';
 
@@ -11,6 +11,8 @@ export const BASE_URL = 'https://app.fixtriage.example';
 export const TWILIO_TOKEN = 'test-twilio-token-0123456789abcdef';
 export const POSTMARK_SECRET = 'test-postmark-secret-0123456789';
 export const PAGING_FROM = '+16045550199';
+/** Test-only TOTP encryption key (fixed, not a secret: it protects only synthetic test users). */
+export const TEST_TOTP_KEY = Buffer.alloc(32, 7);
 
 let shared: Database | null = null;
 export function appDb(): Database {
@@ -42,16 +44,22 @@ export interface Harness {
   messaging: FakeMessagingProvider;
   classifier: FakeClassifier;
   storage: FakeObjectStorage;
+  mailer: FakeMailer;
   handlers: ReturnType<typeof createHandlers>;
 }
 
-export function harness(startIso: string): Harness {
+/** `real` swaps in the SMTP mailer (Mailpit) and the S3 store (MinIO) for the B2 integration tests. */
+export function harness(startIso: string, real: { mailer?: Mailer; storage?: ObjectStorage } = {}): Harness {
   const clock = new FakeClock(Date.parse(startIso));
   const messaging = new FakeMessagingProvider();
   const classifier = new FakeClassifier();
   const storage = new FakeObjectStorage();
-  const deps: WebDeps = { database: appDb(), clock, messaging, classifier, storage, publicBaseUrl: BASE_URL, pagingFromNumber: PAGING_FROM, twilioAuthToken: TWILIO_TOKEN, postmarkSecret: POSTMARK_SECRET };
-  return { deps, clock, messaging, classifier, storage, handlers: createHandlers(deps) };
+  const mailer = new FakeMailer();
+  const deps: WebDeps = {
+    database: appDb(), clock, messaging, classifier, storage: real.storage ?? storage, mailer: real.mailer ?? mailer, totpKey: TEST_TOTP_KEY,
+    publicBaseUrl: BASE_URL, pagingFromNumber: PAGING_FROM, twilioAuthToken: TWILIO_TOKEN, postmarkSecret: POSTMARK_SECRET,
+  };
+  return { deps, clock, messaging, classifier, storage, mailer, handlers: createHandlers(deps) };
 }
 
 export interface Seeded {
@@ -147,7 +155,7 @@ export async function seedOperators(): Promise<{ primary: string; backup: string
   });
 }
 
-/** A signed-in operator session (operator sign-in itself is T-2.1.3, not in B1). */
+/** Test-only shortcut: a signed-in operator session without the sign-in flow (B2 tests the real flow in b2-sign-in). */
 export async function seedOperatorSession(operatorId: string): Promise<{ cookie: string; csrf: string }> {
   const token = randomBytes(32).toString('base64url');
   const csrf = randomBytes(32).toString('base64url');
@@ -155,7 +163,7 @@ export async function seedOperatorSession(operatorId: string): Promise<{ cookie:
   return { cookie: `${SESSION_COOKIE}=${token}`, csrf };
 }
 
-/** A signed-in staff session (sign-in itself is T-2.1.3, not in B1). Returns the cookie and anti-forgery token. */
+/** Test-only shortcut: a signed-in staff session without the sign-in flow (B2 tests the real flow). Returns cookie and anti-forgery token. */
 export async function seedSession(userId: string): Promise<{ cookie: string; csrf: string }> {
   const token = randomBytes(32).toString('base64url');
   const csrf = randomBytes(32).toString('base64url');

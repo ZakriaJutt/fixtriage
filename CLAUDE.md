@@ -1,6 +1,6 @@
 # CLAUDE.md — FixTriage
 
-Read [AGENTS.md](AGENTS.md) first; it is canonical. This file adds only what is specific to this product. B1 (the deterministic safety spine with provider fakes) is implemented under `code/`; see AGENTS.md state line and section 12 for what exists. Everything else is proposed.
+Read [AGENTS.md](AGENTS.md) first; it is canonical. This file adds only what is specific to this product. B1 (the deterministic safety spine with provider fakes) and B2 (password plus TOTP sign-in, SMTP staff mail, S3 attachment storage, all against local services) are implemented under `code/`; see AGENTS.md state line and section 12 for what exists. Everything else is proposed.
 
 ## The question this repository answers
 

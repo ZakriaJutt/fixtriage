@@ -10,3 +10,6 @@ export * from './providers/classifier';
 export * from './providers/storage';
 export * from './providers/monitor';
 export * from './tzdata';
+export * from './auth-crypto';
+export * from './providers/mail';
+export * from './providers/factory';

@@ -57,6 +57,13 @@
       "when": 1794359643282,
       "tag": "0007_round4_b1_012",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794360377986,
+      "tag": "0008_b2_sign_in",
+      "breakpoints": true
     }
   ]
 }

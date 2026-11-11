@@ -1,6 +1,6 @@
 // Process-wide wiring for the Next.js deployable: configuration, database, providers (fakes in B1), check-in.
 import { createDatabase } from '@fixtriage/db';
-import { checkTimezoneData, FakeClassifier, FakeMessagingProvider, FakeObjectStorage, HttpMonitorClient, loadConfig, systemClock } from '@fixtriage/platform';
+import { checkTimezoneData, createMailer, createStorage, FakeClassifier, FakeMessagingProvider, HttpMonitorClient, loadConfig, parseSecretKey, systemClock } from '@fixtriage/platform';
 import { createHandlers, route } from './handlers';
 
 let handlers: ReturnType<typeof createHandlers> | null = null;
@@ -15,7 +15,10 @@ export function getHandlers(): ReturnType<typeof createHandlers> {
     clock: systemClock,
     messaging: new FakeMessagingProvider(),
     classifier: new FakeClassifier(),
-    storage: new FakeObjectStorage(),
+    // B2: object storage over the S3 API (MinIO locally) and staff mail over SMTP (Mailpit locally), by settings.
+    storage: createStorage(c),
+    mailer: createMailer(c),
+    totpKey: parseSecretKey(c.TOTP_ENCRYPTION_KEY),
     publicBaseUrl: c.PUBLIC_BASE_URL,
     pagingFromNumber: c.PAGING_FROM_NUMBER,
     twilioAuthToken: c.TWILIO_AUTH_TOKEN,

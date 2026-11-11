@@ -2,7 +2,7 @@
 
 Canonical instructions for any agent or person working in this repository. `CLAUDE.md` adds product-specific guidance and defers to this file.
 
-**State of the repository (2026-11-11): build milestone B1 implemented on branch `feat/b1-foundation`, authorised by the owner on 2026-11-11 before the Phase 0 sales gate (G-build) passed. Code lives under `code/` (npm workspaces). Implemented: the deterministic safety spine (intake, safety reply, rule set v1, tier floor, escalation chain, outbox, duplicate rules, failed-dispatch reopen, STOP path, readiness) with provider fakes only. Not implemented: real provider clients, sign-in, UI screens, AI drafting, digest, export, retention, deployment. Test results: [verification file section 7](verification-report-fixing.md#7-build-milestone-b1-2026-11-11). Commands not listed in section 12 remain proposed and have never been run.**
+**State of the repository (2026-11-11): build milestones B1 (branch `feat/b1-foundation`) and B2 (branch `feat/b2-local-auth`) implemented, authorised by the owner on 2026-11-11 before the Phase 0 sales gate (G-build) passed. Code lives under `code/` (npm workspaces). Implemented: the deterministic safety spine (intake, safety reply, rule sets, tier floor, escalation chain, outbox, duplicate rules, failed-dispatch reopen, STOP path, readiness) with provider fakes; B2: password plus TOTP sign-in with database sessions, invitations, reset, disable and manager re-enrolment, staff mail over SMTP (Mailpit locally), tenant attachments in S3-compatible storage (MinIO locally). Tenant SMS, voice and email remain fakes. Not implemented: real provider clients, the owner lost-factor procedure, image re-encoding, UI screens, AI drafting, digest, export, retention, deployment. Test results: [verification file sections 7 and 8](verification-report-fixing.md#8-build-milestone-b2-sign-in-and-local-services-2026-11-11). Commands not listed in section 12 remain proposed and have never been run.**
 
 ## 1. Reading order
 
@@ -91,6 +91,14 @@ Utilities index (B1, paths under `code/`):
 | Materialise a request from a stored message (B1-011) | `packages/services/src/intake.ts` | `materialiseRequest` |
 | tz database guard (B1-008) | `packages/platform/src/tzdata.ts` | `checkTimezoneData` |
 | Job runners: safety loop and model loop (B1-002) | `packages/services/src/jobs.ts` | `processDueJobs`, `processClassifyJobs` |
+| Sign-in primitives: Argon2id, password policy, TOTP, secret box, tokens, recovery codes (B2) | `packages/platform/src/auth-crypto.ts` | `hashPassword`, `verifyPassword`, `checkPasswordPolicy`, `matchTotp`, `seal`, `open`, `newOpaqueToken`, `newRecoveryCodes` |
+| Staff sign-in, invitations, reset, disable, re-enrolment, rate limit (B2) | `packages/services/src/auth.ts` | `signIn`, `signOut`, `inviteUser`, `inviteFirstOwner`, `startEnrolment`, `confirmEnrolment`, `requestReset`, `completeReset`, `disableUser`, `reenrolManager`, `SIGN_IN_POLICY` |
+| Session check, anti-forgery check, session refresh | `packages/services/src/staff.ts` | `authenticate`, `checkCsrf`, `touchSession` |
+| Staff mail over SMTP (B2) | `packages/platform/src/providers/mail.ts` | `Mailer`, `SmtpMailer`, `FakeMailer` |
+| Object storage over S3 (B2) and key guard | `packages/platform/src/providers/storage.ts` | `ObjectStorage`, `S3ObjectStorage`, `FakeObjectStorage`, `assertStorageKey` |
+| Mail and storage from settings (B2) | `packages/platform/src/providers/factory.ts` | `createMailer`, `createStorage` |
+| Attachment store and authorised read (B2) | `packages/services/src/attachments.ts` | `storeAttachment`, `readAttachment`, `sniffContentType` |
+| Local settings file loader (B2) | `packages/platform/src/config.ts` | `loadLocalEnvFile` |
 
 ## 7. Account safety
 
@@ -128,7 +136,7 @@ Run from `code/` (or `make <target>` from the root). `pnpm`, `uv` and Docker are
 
 | Proposed command | Exists as | Status |
 |---|---|---|
-| `pnpm dev` | `npm run dev` (`make dev`): role, migrations and seed on `fixtriage_dev`, fake monitor on 3109, web on 8109, worker; waits for `/healthz` and `/readyz` | Exists; run 2026-11-11, healthy |
+| `pnpm dev` | `npm run dev` (`make dev`): reads `code/.env` (copy `.env.example`; Mailpit and MinIO must be running), role, migrations and seed on `fixtriage_dev`, fake monitor on 3109, web on 8109, worker; waits for `/healthz` and `/readyz` | Exists; run 2026-11-11 on B2, healthy (storage check green) |
 | `pnpm check:migrations` | `npm run check:migrations` | Exists; run 2026-11-11, pass |
-| — | `npm run lint`, `npm run typecheck`, `npm test`, `npm run db:reset-test`, `npm run db:migrate`, `npm run db:setup`, `npm run verify` | Exist |
+| — | `npm test` needs `code/.env` and local Mailpit (SMTP 1025, API 8025) and MinIO (9000) for the B2 tests; `npm run lint`, `npm run typecheck`, `npm run db:reset-test`, `npm run db:migrate`, `npm run db:setup`, `npm run verify` | Exist |
 | `pnpm seed:synthetic`, `eval:classifier`, `replay:inbound`, `drill:restore`, `probe:run`, `load:burst` | — | Still proposed, not written |

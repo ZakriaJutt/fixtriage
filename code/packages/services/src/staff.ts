@@ -19,15 +19,24 @@ export class AuthError extends Error {
   }
 }
 
+/** Anti-forgery token: the custom header must match the hash stored with the session (V3.5.1). */
+export function checkCsrf(stored: Buffer, header: string | null): void {
+  const got = header ? sha256(header) : null;
+  if (!got || got.length !== stored.length || !timingSafeEqual(got, stored)) throw new AuthError('csrf');
+}
+
+/** Keeps an active session inside the 8-hour inactivity limit (V7.3.1); the database writes at most once a minute. */
+export async function touchSession(deps: Pick<Deps, 'database'>, token: string): Promise<void> {
+  await deps.database.pool.query('select auth_touch_session($1)', [sha256(token)]);
+}
+
 /** Session check; state-changing requests also need the anti-forgery token in a custom header (V3.5.1, IT-21). */
 export async function authenticate(deps: Pick<Deps, 'database'>, sessionToken: string | null, csrfHeader: string | null, stateChanging: boolean): Promise<StaffPrincipal> {
   if (!sessionToken) throw new AuthError('no_session');
   const s = await resolvers.session(deps.database, sha256(sessionToken));
   if (!s || !s.user_id || !s.account_id) throw new AuthError('no_session');
-  if (stateChanging) {
-    const got = csrfHeader ? sha256(csrfHeader) : null;
-    if (!got || got.length !== s.csrf_token_hash.length || !timingSafeEqual(got, s.csrf_token_hash)) throw new AuthError('csrf');
-  }
+  if (stateChanging) checkCsrf(s.csrf_token_hash, csrfHeader);
+  await touchSession(deps, sessionToken);
   return { userId: s.user_id, accountId: s.account_id, role: s.role as 'owner' | 'manager' };
 }
 

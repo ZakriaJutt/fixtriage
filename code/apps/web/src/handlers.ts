@@ -2,7 +2,7 @@
 // stay one line each and tests can call the handlers directly. Links and signature URLs come from PUBLIC_BASE_URL.
 import { isTier } from '@fixtriage/core';
 import { eq, resolvers, tables, withAccount } from '@fixtriage/db';
-import { createLogger, newCorrelationId, publicUrl, secretEquals, verifyTwilioSignature, withCorrelation } from '@fixtriage/platform';
+import { createLogger, newCorrelationId, publicUrl, secretEquals, sha256, verifyTwilioSignature, withCorrelation } from '@fixtriage/platform';
 import {
   ackByToken,
   ackByVoice,
@@ -24,19 +24,66 @@ import {
   readiness,
   recordOutcome,
   withIdempotency,
-  type Deps,
+  type AuthDeps,
   type StaffPrincipal,
+  completeReset,
+  confirmEnrolment,
+  disableUser,
+  inviteUser,
+  readAttachment,
+  reenrolManager,
+  requestReset,
+  signIn,
+  SignInError,
+  signOut,
+  startEnrolment,
+  storeAttachment,
+  checkCsrf,
 } from '@fixtriage/services';
 
 const log = createLogger('web');
 
-export interface WebDeps extends Deps {
+export interface WebDeps extends AuthDeps {
   twilioAuthToken: string;
   postmarkSecret: string;
 }
 
 export const SESSION_COOKIE = '__Host-ft_session';
 export const CSRF_HEADER = 'x-csrf-token';
+/** Readable by the page's script so it can echo the token in CSRF_HEADER; the server compares with the stored hash. */
+export const CSRF_COOKIE = '__Host-ft_csrf';
+
+/** V3.3.2, V7.2.4: __Host- prefix, Secure, Path=/, no Domain; the session cookie is HttpOnly; SameSite=Lax (TRD 8.1). */
+function sessionCookies(token: string, csrf: string, maxAgeS: number): string[] {
+  return [
+    `${SESSION_COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${maxAgeS}`,
+    `${CSRF_COOKIE}=${csrf}; Path=/; Secure; SameSite=Lax; Max-Age=${maxAgeS}`,
+  ];
+}
+const CLEAR_COOKIES = [`${SESSION_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0`, `${CSRF_COOKIE}=; Path=/; Secure; SameSite=Lax; Max-Age=0`];
+
+function withCookies(res: Response, cookies: string[]): Response {
+  for (const c of cookies) res.headers.append('set-cookie', c);
+  res.headers.set('cache-control', 'no-store');
+  return res;
+}
+
+/**
+ * Client address for the per-client sign-in limit. Behind the load balancer the first X-Forwarded-For hop is the
+ * client (the balancer overwrites the header); without it every request shares one bucket, which fails safe.
+ */
+function clientOf(req: Request): string {
+  return (req.headers.get('x-forwarded-for') ?? '').split(',')[0]!.trim() || 'unknown';
+}
+
+/** Pre-session auth routes take JSON only: a cross-site form cannot send application/json without a preflight (login CSRF). */
+async function jsonBody(req: Request): Promise<Record<string, unknown>> {
+  if (!(req.headers.get('content-type') ?? '').toLowerCase().startsWith('application/json')) throw new SignInError('invalid_credentials');
+  const b = (await req.json().catch(() => null)) as unknown;
+  if (!b || typeof b !== 'object' || Array.isArray(b)) throw new SignInError('invalid_credentials');
+  return b as Record<string, unknown>;
+}
+const str = (v: unknown, max = 512): string => (typeof v === 'string' && v.length <= max ? v : '');
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -75,6 +122,18 @@ export function createHandlers(deps: WebDeps): Record<string, Handler> {
         try {
           return await h(req, params, cid);
         } catch (e) {
+          if (e instanceof SignInError) {
+            log.warn('auth.sign_in_refused', { route: name, code: e.code });
+            if (e.code === 'rate_limited') {
+              const r = error(429, 'rate_limited', cid, `try again in ${Math.ceil(e.retryAfterS / 60)} minutes`);
+              r.headers.set('retry-after', String(e.retryAfterS));
+              return r;
+            }
+            if (e.code === 'weak_password') return error(422, 'weak_password', cid, e.detail ?? 'weak_password');
+            if (e.code === 'invalid_link') return error(410, 'invalid_link', cid);
+            if (e.code === 'invalid_code') return error(401, 'invalid_code', cid);
+            return error(401, 'invalid_credentials', cid, 'email, password or code not accepted');
+          }
           if (e instanceof AuthError) {
             log.warn('auth.rejected', { route: name, code: e.code });
             return error(e.code === 'csrf' ? 403 : 401, e.code, cid);
@@ -179,7 +238,92 @@ export function createHandlers(deps: WebDeps): Record<string, Handler> {
       // B1-004: Postmark retries an inbound webhook that does not answer 200 (and stops on 403), so an unrouted message
       // is answered 503 after it was recorded: the message stays retrievable while the operator fixes the routing.
       if (r.status === 'unrouted') return error(503, 'unrouted_destination', cid);
+      if (r.status === 'stored' && atts > 0) {
+        // Postmark delivers attachment content inline (base64). Stored after the message and its safety reply are
+        // committed; a failure marks the attachment rejected or unavailable and never affects the text (TRD 6.4).
+        const list = (b!.Attachments as Array<Record<string, unknown>>).slice(0, 10);
+        for (const [idx, a] of list.entries()) {
+          const bytes = typeof a?.Content === 'string' ? Buffer.from(a.Content, 'base64') : Buffer.alloc(0);
+          await storeAttachment(deps, r.accountId, { inboundMessageId: r.inboundId, idx, bytes }).catch((e: unknown) => log.error('attachment.error', { error: e instanceof Error ? e.name : 'unknown' }));
+        }
+      }
       return json(200, { status: r.status });
+    }),
+
+    // ---------- B2 sign-in (TRD 8.1; T-2.1.3) ----------
+    'POST /auth/sign-in': traced('auth.sign_in', async (req) => {
+      const b = await jsonBody(req);
+      const r = await signIn(deps, { email: str(b.email, 254), password: str(b.password, 1024), code: str(b.code, 32), client: clientOf(req), presentedToken: cookie(req, SESSION_COOKIE) });
+      return withCookies(json(200, { kind: r.kind, role: r.role, csrf_token: r.csrf, expires_at: r.expiresAt.toISOString() }), sessionCookies(r.token, r.csrf, 7 * 24 * 3600));
+    }),
+
+    'POST /auth/sign-out': traced('auth.sign_out', async (req) => {
+      const token = cookie(req, SESSION_COOKIE);
+      if (!token) throw new AuthError('no_session');
+      const s = await resolvers.session(deps.database, sha256(token));
+      if (!s) throw new AuthError('no_session');
+      checkCsrf(s.csrf_token_hash, req.headers.get(CSRF_HEADER));
+      await signOut(deps, token);
+      return withCookies(new Response(null, { status: 204 }), CLEAR_COOKIES);
+    }),
+
+    'GET /auth/session': traced('auth.session', async (req) => {
+      const token = cookie(req, SESSION_COOKIE);
+      const s = token ? await resolvers.session(deps.database, sha256(token)) : null;
+      if (!s) throw new AuthError('no_session');
+      return withCookies(json(200, { kind: s.operator_id ? 'operator' : 'user', role: s.role, user_id: s.user_id, operator_id: s.operator_id, expires_at: s.expires_at }), []);
+    }),
+
+    'POST /auth/enrol/start': traced('auth.enrol_start', async (req) => {
+      const b = await jsonBody(req);
+      const r = await startEnrolment(deps, { token: str(b.token, 100), password: str(b.password, 1024), client: clientOf(req) });
+      return withCookies(json(200, { otpauth_uri: r.otpauthUri, secret: r.secret }), []);
+    }),
+
+    'POST /auth/enrol/confirm': traced('auth.enrol_confirm', async (req) => {
+      const b = await jsonBody(req);
+      const r = await confirmEnrolment(deps, { token: str(b.token, 100), code: str(b.code, 32), client: clientOf(req) });
+      return withCookies(json(200, { role: r.role, recovery_codes: r.recoveryCodes, csrf_token: r.csrf }), sessionCookies(r.token, r.csrf, 7 * 24 * 3600));
+    }),
+
+    'POST /auth/reset/request': traced('auth.reset_request', async (req) => {
+      const b = await jsonBody(req);
+      await requestReset(deps, { email: str(b.email, 254), client: clientOf(req) });
+      return json(202, { status: 'if the address belongs to an enrolled user, a link was sent' });
+    }),
+
+    'POST /auth/reset/complete': traced('auth.reset_complete', async (req) => {
+      const b = await jsonBody(req);
+      await completeReset(deps, { token: str(b.token, 100), code: str(b.code, 32), password: str(b.password, 1024), client: clientOf(req) });
+      return withCookies(new Response(null, { status: 204 }), CLEAR_COOKIES);
+    }),
+
+    'POST /api/settings/users': staff('users.invite', true, async (p, req) => {
+      const b = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+      const r = await inviteUser(deps, p, { email: str(b.email, 254), displayName: str(b.display_name, 200), role: str(b.role, 20) as 'manager' });
+      return json(201, { user_id: r.userId });
+    }),
+
+    'POST /api/settings/users/:id/disable': staff('users.disable', true, async (p, _req, params) => json(200, await disableUser(deps, p, idParam(params)))),
+
+    'POST /api/settings/users/:id/reenrol': staff('users.reenrol', true, async (p, _req, params) => {
+      await reenrolManager(deps, p, idParam(params));
+      return json(202, { status: 'enrolment link sent' });
+    }),
+
+    // Attachments (T-2.3.7 part): only through this route, only for the session's account; images inline, others download.
+    'GET /api/attachments/:id': staff('attachments.get', false, async (p, _req, params) => {
+      const a = await readAttachment(deps, p, idParam(params));
+      return new Response(new Uint8Array(a.body), {
+        status: 200,
+        headers: {
+          'content-type': a.contentType,
+          'content-disposition': a.inline ? 'inline' : 'attachment',
+          'x-content-type-options': 'nosniff',
+          'content-security-policy': "default-src 'none'; sandbox",
+          'cache-control': 'private, no-store',
+        },
+      });
     }),
 
     'GET /api/requests/:id': staff('requests.get', false, async (p, _req, params) => {

@@ -691,7 +691,9 @@ export const capabilityTokens = pgTable(
     foreignKey({ name: 'capability_tokens_step_fk', columns: [t.accountId, t.escalationStepId], foreignColumns: [escalationSteps.accountId, escalationSteps.id] }),
     foreignKey({ name: 'capability_tokens_user_fk', columns: [t.accountId, t.userId], foreignColumns: [users.accountId, users.id] }),
     foreignKey({ name: 'capability_tokens_dispatch_fk', columns: [t.accountId, t.dispatchId], foreignColumns: [dispatches.accountId, dispatches.id] }),
-    oneOf('capability_tokens_purpose_values', t.purpose, ['ack', 'vendor']),
+    oneOf('capability_tokens_purpose_values', t.purpose, ['ack', 'vendor', 'invite', 'reset']),
+    // B2: invitation (enrolment) and password-reset links name the user they are for.
+    check('capability_tokens_user_target', sql`${t.purpose} not in ('invite', 'reset') or ${t.userId} is not null`),
     check('capability_tokens_ack_targets', sql`${t.purpose} <> 'ack' or (${t.escalationStepId} is not null and ${t.userId} is not null)`),
     check('capability_tokens_vendor_target', sql`${t.purpose} <> 'vendor' or ${t.dispatchId} is not null`),
     isolation('capability_tokens'),
@@ -821,19 +823,56 @@ export const unroutedInbound = pgTable(
   ],
 );
 
+// ---------- B2 sign-in (TRD 8.1) ----------
+
+/** Single-use recovery codes for a user's second factor (V6.5.1). Stored hashed; shown once at enrolment. */
+export const recoveryCodes = pgTable(
+  'recovery_codes',
+  {
+    id: pk(),
+    createdAt: createdAt(),
+    accountId: uuid('account_id').notNull().references(() => accounts.id),
+    userId: uuid('user_id').notNull(),
+    codeHash: bytea('code_hash').notNull(),
+    usedAt: ts('used_at'),
+  },
+  (t) => [
+    unique('recovery_codes_user_code_uq').on(t.userId, t.codeHash),
+    foreignKey({ name: 'recovery_codes_user_fk', columns: [t.accountId, t.userId], foreignColumns: [users.accountId, users.id] }),
+    isolation('recovery_codes'),
+  ],
+);
+
+/**
+ * Sign-in rate limiting (V6.3.1, V6.1.1). Global, no account data: the key is SHA-256 of a scope plus the normalised
+ * email or client address. Written only through the auth_throttle_* functions; the application role has no grant.
+ */
+export const authThrottle = pgTable('auth_throttle', {
+  keyHash: bytea('key_hash').primaryKey(),
+  windowStart: ts('window_start').notNull(),
+  hits: integer('hits').notNull().default(0),
+  lockedUntil: ts('locked_until'),
+});
+
 /** Account-owned tables: each has account_id, RLS enabled and forced, and a case in IT-10. */
 export const ACCOUNT_TABLES = [
   'accounts', 'users', 'properties', 'units', 'tenant_contacts', 'vendors', 'vendor_trades', 'oncall_shifts', 'channels',
   'incidents', 'requests', 'outbound_messages', 'inbound_messages', 'attachments', 'classifications', 'work_orders', 'dispatches',
-  'escalations', 'escalation_steps', 'capability_tokens', 'audit_events', 'jobs', 'idempotency_keys',
+  'escalations', 'escalation_steps', 'capability_tokens', 'audit_events', 'jobs', 'idempotency_keys', 'recovery_codes',
 ] as const;
 
-export const GLOBAL_TABLES = ['operators', 'sessions', 'rule_sets', 'probe_runs', 'pending_status_events', 'unrouted_inbound'] as const;
+export const GLOBAL_TABLES = ['operators', 'sessions', 'rule_sets', 'probe_runs', 'pending_status_events', 'unrouted_inbound', 'auth_throttle'] as const;
+
+/** B2 (migration 0008): the only writers of sessions, operator TOTP state and the sign-in throttle (schema.md 4). */
+export const AUTH_FUNCTIONS = [
+  'auth_create_session', 'auth_touch_session', 'auth_revoke_session', 'auth_revoke_user_sessions',
+  'auth_operator_accept_totp', 'auth_throttle_check', 'auth_throttle_hit', 'auth_throttle_clear',
+] as const;
 
 /** Objects created by migrations/0001 that Drizzle cannot express; checked by the ORM-diff test (IT-14). */
 export const CUSTOM_OBJECTS = {
   constraints: ['oncall_shifts_no_overlap'],
   triggers: ['requests_tier_guard', 'incidents_tier_guard', 'audit_events_no_change', 'accounts_validate'],
-  functions: ['resolve_channel', 'resolve_session', 'resolve_login', 'resolve_capability', 'resolve_outbound'],
+  functions: ['resolve_channel', 'resolve_session', 'resolve_login', 'resolve_capability', 'resolve_outbound', ...AUTH_FUNCTIONS],
   views: ['due_escalations', 'pending_outbox', 'due_dispatches', 'sweep_accounts', 'due_jobs', 'due_undecided', 'job_health', 'dead_jobs'],
 } as const;

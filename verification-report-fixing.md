@@ -151,7 +151,7 @@ Single home of R-01..R-22. Tests are `Not run`. "Task" is the responsible task i
 | R-10 | Merged branches introduce conflicting migration order | Deploy fails or applies in a different order on staging and production during a live pilot | Linear sequence; CI rejects two migrations with the same parent | CI check | IT-14 fixture with conflicting parents fails CI **B1 2026-11-11: IT-14 conflicting-parents case passed (journal order check; no CI yet) (section 7).** | T-2.1.4 |
 | R-11 | Index creation locks busy production tables during deployment | Inbound webhooks block on `inbound_messages` during a deploy; safety replies and pages are delayed for minutes | Concurrent index builds; `lock_timeout` 3 s; additive changes only | Webhook latency alert; lock-wait log | Staging deploy during `load:burst`: p99 safety reply stays ≤ 60 s | T-2.1.2 |
 | R-12 | Correlation IDs disappear across jobs and retries, or sensitive data leaks into logs | After a missed emergency nobody can reconstruct what happened to that message; or tenant numbers and message text sit in logs outside the retention schedule | Correlation ID stored on the inbound row and copied to every job and message; scrubber; logs hold IDs only | Log lines without correlation ID; scrubber test | UT-11; E2E-03 trace shows one correlation ID from webhook to acknowledgement **B1 2026-11-11: UT-11 passed; correlation ID carried webhook -> jobs -> outbound rows (not separately asserted end to end) (section 7).** | T-2.1.5 |
-| R-13 | Upload keys collide or fail to isolate tenant, source, and purpose | A leak photo from one brokerage's tenant appears on another brokerage's work order or is overwritten by another file | Key `acct/{account_id}/{purpose}/{yyyy}/{mm}/{uuid}`; never user file names | Storage access logs; key-format check | UT-09; IT-10 storage read denied across accounts **B1 2026-11-11: UT-09 key format passed; storage read across accounts not run (section 7).** | T-2.3.7 |
+| R-13 | Upload keys collide or fail to isolate tenant, source, and purpose | A leak photo from one brokerage's tenant appears on another brokerage's work order or is overwritten by another file | Key `acct/{account_id}/{purpose}/{yyyy}/{mm}/{uuid}`; never user file names | Storage access logs; key-format check | UT-09; IT-10 storage read denied across accounts **B1 2026-11-11: UT-09 key format passed; storage read across accounts not run (section 7).** **B2 2026-11-11: storage read across accounts passed on MinIO (`test/b2-storage.test.ts`, section 8).** | T-2.3.7 |
 | R-14 | Temporary uploads survive retention expiry or failed cleanup | Exports full of tenant data and raw payloads persist after the promised 7 or 30 days, contrary to the privacy schedule | Storage lifecycle rule plus sweep job; `expires_at` on exports | Sweep report of objects past expiry (should be zero) | IT-15: expired objects and rows gone after sweep | T-2.3.10 |
 | R-15 | Missing persistent volumes cause data loss after service recreation | An open escalation and its audit trail vanish on redeploy; paging stops silently | No state in containers; managed database and object storage; named volumes locally | Restore drill; row counts before and after task recreation | T-3.1.5 check: recreate tasks, open escalation continues, counts equal | T-3.1.5 |
 | R-16 | Generated file links use internal hosts or `localhost` behind a public proxy | The acknowledge link in a 2 am page or the vendor link does not open; the on-call person cannot acknowledge from the text | All links from `PUBLIC_BASE_URL`; startup rejects a non-HTTPS or internal host in production | Link-click failures; UT on builder | UT-09; T-2.2.6 check opens the link on a real phone from staging **B1 2026-11-11: UT-09 passed (section 7).** | T-2.2.6 |
@@ -378,3 +378,65 @@ Edits made after that retest. Status of every row: **fixed after round-4 retest,
 Commands, from `code/`, clean test database: `npm run lint` 0 problems; `npm run typecheck` 0 errors; `npm run db:reset-test` applied `0000`..`0007`; `npm run check:migrations`: order linear, drizzle-kit no pending schema change, ORM vs database diff empty; `npm test` **28 files, 256 passed, 0 failed**. Reviewer's scripts (not edited): `fixtriage-b1-round4_adversarial.mts` **19/19** (was 15/19; its INFO rule-coverage measurements are unchanged because rule set v4 is unchanged), `fixtriage-b1-round3.mts` 17/17, `fixtriage-b1-adversarial.mts` 41/41.
 
 Minors the reviewer noted and not changed in this round: the minimal fallback request has no `unit_id`; one safety reply per URGENT rule hit; one prompt per routine text. B1-010 stays open as the reviewer's note. Documents changed: PRD (UR-3, EP-10a(b), FD-7a, SM-09), App-flow (section 7 paths), TRD (8.5, 8.6 keyword sentence), schema.md (3.5 round-4 table, 4), AGENTS.md (utilities index), this file. Awaiting recheck.
+
+## 8. Build milestone B2: sign-in and local services (2026-11-11)
+
+Branch `feat/b2-local-auth`, created from `feat/b1-foundation` at `dfcb521` (no open Step 0 item). Owner request 2026-11-11: build what needs no external account. Written and run by the developer; **not independently reviewed**.
+
+### 8.1 Tasks implemented
+
+| Task | What exists now (paths under `code/`) |
+|---|---|
+| T-2.1.3 (all but the owner lost-factor procedure) | Password plus TOTP sign-in for staff and operators, sessions in PostgreSQL, anti-forgery token, sign-out, 8-hour inactivity and 7-day absolute expiry, rotation at sign-in, revocation on disable, reset and re-enrolment, invitations and enrolment, recovery codes, sign-in rate limit and lockout, owner-only user routes. `packages/platform/src/auth-crypto.ts`, `packages/services/src/auth.ts`, `apps/web/src/handlers.ts` (`/auth/*`, `/api/settings/users*`), migration `0008_b2_sign_in` (`recovery_codes`, `auth_throttle`, `auth_*` functions, `capability_tokens` purposes `invite` and `reset`). The B1 test shortcut `seedSession` remains in `test/helpers.ts` only; no production path creates a session except `signIn` and `confirmEnrolment` |
+| Staff mail over SMTP | `packages/platform/src/providers/mail.ts` (`SmtpMailer`, `FakeMailer`), selected by `MAIL_TRANSPORT`/`SMTP_*`; locally Mailpit 127.0.0.1:1025 |
+| T-2.3.7 (in part) | Attachment storage over the S3 API: `S3ObjectStorage` (MinIO locally, bucket `fixtriage-dev`), keys only from `storageKey` (`acct/{account_id}/inbound/{yyyy}/{mm}/{uuid}`, R-13), key guard in the store, type by content, 10 MB limit, rejected files recorded, download only through `GET /api/attachments/:id` inside `withAccount`. Postmark inbound attachments (inline base64) are stored after the message is committed. **Not done:** image re-encoding; Twilio MMS `media.fetch` (needs the provider account) |
+
+Tenant SMS, voice and email remain behind the fake provider. Not built: the owner's lost-factor procedure (two operators after a call-back, V6.4.4), an operator invitation flow (operators are enrolled by a database step), the sign-in screens S-01 (API only).
+
+### 8.2 Commands and results (from `code/`, clean test database; Mailpit and MinIO running locally, settings in the gitignored `code/.env`)
+
+| Command | Result |
+|---|---|
+| `npm run lint` | 0 problems |
+| `npm run typecheck` | 0 errors |
+| `npm run db:reset-test` | dropped schema, applied `0000`..`0008` |
+| `npm test` | **30 files, 278 passed, 0 failed** (256 from B1 plus 17 in `test/b2-sign-in.test.ts` and 5 in `test/b2-storage.test.ts`) |
+| `npm run check:migrations` | order linear (`0000`..`0008`); drizzle-kit no pending schema change; ORM vs database diff empty |
+| `npm run dev` | web, worker and fake monitor healthy; `/readyz` green including `storage` (MinIO HeadBucket); `POST /auth/sign-in` answered the generic 401 |
+
+### 8.3 Tests that ran
+
+| Test | Covers | Result |
+|---|---|---|
+| `b2-sign-in`: invitation through Mailpit, enrolment, cookie attributes, hashes | V6.3.3, V11.4.2, V3.3.2, invitation flow; email read back from the Mailpit API | Passed |
+| `b2-sign-in`: link reused, link expired (72 h), weak and common password | V6.2.1, V6.2.4, single-use links | Passed |
+| `b2-sign-in`: password plus TOTP, same code refused the second time, generic refusal | V6.5.1, V6.3.3, no account enumeration in the answer | Passed |
+| `b2-sign-in`: recovery code accepted once | V6.5.1 | Passed |
+| `b2-sign-in`: rotation at sign-in | V7.2.4 | Passed |
+| `b2-sign-in`: sign-out needs the anti-forgery token and ends the session server-side | V3.5.1, V7.4.1 | Passed |
+| `b2-sign-in`: 8-hour inactivity, 7-day absolute, activity refreshes | V7.3.1, V7.3.2 | Passed |
+| `b2-sign-in`: five failures lock the email (429, Retry-After), per-client limit | V6.3.1, V6.1.1 | Passed |
+| `b2-sign-in`: reset through Mailpit needs TOTP or recovery code, ends sessions; reuse, expiry; unknown email same answer and no mail | V6.4.3, V7.4.2 | Passed |
+| `b2-sign-in`: non-JSON pre-session request refused | Login CSRF | Passed |
+| `b2-sign-in`: disable ends sessions and sign-in; refused for an on-call user (EP-9) and for a manager | V7.4.2, V8.2.1, S-14 AC | Passed |
+| `b2-sign-in`: manager cannot invite; owner re-enrols a manager; owner cannot re-enrol an owner | TRD 8.1 lost factor (manager part), V8.2.1 | Passed |
+| `b2-sign-in`: cross-account user routes 404; `auth_revoke_user_sessions` with another account's user changes nothing | IT-10 for the new routes and functions | Passed |
+| `b2-sign-in`: first owner invited by an operator, enrolled, signs in | Account bootstrap | Passed |
+| `b2-sign-in`: operator sign-in reaches `/ops`; replayed code refused; staff session refused on `/ops` | Operator sign-in | Passed |
+| `b2-sign-in`: logs carry no email, token or TOTP secret | V16.2.5, R-12 | Passed |
+| `b2-sign-in`: application role has no grant on `sessions`/`auth_throttle`; `auth_*` are SECURITY DEFINER; no session for an unenrolled user | schema.md 4 | Passed |
+| `b2-storage`: photo stored under `acct/{A}/inbound/...` on MinIO, type by content, user file name ignored; A downloads; B 404; no session 401; anonymous S3 read 403; view audited | R-13, IT-10 storage path (was Not run in B1), V5.2.2, V5.3.2 (keys) | Passed |
+| `b2-storage`: PDF served as attachment | V5 (non-images never inline) | Passed |
+| `b2-storage`: oversized and wrong-type rejected; safety reply still queued | V5.2.1, V5.2.2, MH-02 | Passed |
+| `b2-storage`: storage down marks the attachment unavailable | TRD 6.4 media row | Passed |
+| `b2-storage`: store refuses keys not from the key builder; B's attachment not reachable from A | R-13 | Passed |
+
+Every object written to MinIO is deleted in `afterAll` (checked empty); every Mailpit message sent to a test address is deleted. Risk R-13: IT-10 storage read across accounts now **passed** (this section).
+
+### 8.4 OWASP ASVS 5.0.0
+
+Covered by a test above: V6.1.1, V6.2.1, V6.2.4 (built-in list), V6.3.1, V6.3.3, V6.4.3, V6.5.1, V11.4.2, V3.3.2, V3.5.1, V7.2.1, V7.2.4, V7.3.1, V7.3.2, V7.4.1, V7.4.2, V8.2.1, V8.3.1, V5.2.1, V5.2.2, V5.3.2 (generated keys only), V14.2.1 (enrolment and reset links: token in the fragment), V16.2.5, V16.3.1. Not covered: V6.4.4 (owner lost-factor with two operators: not built), V5.3.2 image re-encoding, V12.2.1 and V3.4.1 (TLS, HSTS: deployment), V13.3.1 (secrets manager: deployment), V6.3.4 in part, V14.2.1 for acknowledge and vendor links and V5.4.3 (accepted for the pilot, TRD 8.7). A control tested locally is not a compliance claim for the deployed service.
+
+### 8.5 Document changes and deviations
+
+TRD 5.1 (new routes), 7 (local runtime), 8.1 (as-built paragraph: parameters, links, rate limits, staff mail outside the outbox and why), 8.7 (B2 status); schema.md 3.5 (B2 table) and 4 (`auth_*` functions); AGENTS.md (state line, utilities index, commands); CLAUDE.md (status line). Deviation recorded in TRD 8.1: invitation and reset mail is sent directly over SMTP, not through the outbox, so that no link token is stored in clear text. Departure in the lockout: S-01 says five failures "start a delay"; built as a 15-minute lock of that email, shown as text from `Retry-After`.

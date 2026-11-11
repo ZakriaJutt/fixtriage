@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseConfig, publicUrl, storageKey } from '../src';
 
-const env = { DATABASE_URL: 'postgres://x@localhost/db', TWILIO_AUTH_TOKEN: 'x'.repeat(32), POSTMARK_INBOUND_SECRET: 'y'.repeat(32), PAGING_FROM_NUMBER: '+16045550199' };
+const env = { DATABASE_URL: 'postgres://x@localhost/db', TWILIO_AUTH_TOKEN: 'x'.repeat(32), POSTMARK_INBOUND_SECRET: 'y'.repeat(32), PAGING_FROM_NUMBER: '+16045550199', TOTP_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString('base64'), SMTP_USER: 'u', SMTP_REQUIRE_TLS: 'true' };
 
 describe('UT-09 keys and links', () => {
   it('builds acct/{id}/{purpose}/{yyyy}/{mm}/{uuid}', () => {

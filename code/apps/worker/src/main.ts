@@ -1,6 +1,6 @@
 // Worker entry point. Starts without any web-framework module (T-2.1.5).
 import { createDatabase } from '@fixtriage/db';
-import { checkTimezoneData, createLogger, FakeClassifier, FakeMessagingProvider, FakeObjectStorage, HttpMonitorClient, loadConfig, noopMonitor, systemClock } from '@fixtriage/platform';
+import { checkTimezoneData, createLogger, FakeClassifier, FakeMessagingProvider, createStorage, HttpMonitorClient, loadConfig, noopMonitor, systemClock } from '@fixtriage/platform';
 import { startWorker } from './worker';
 
 const log = createLogger('worker');
@@ -27,7 +27,7 @@ const deps = {
   clock: systemClock,
   messaging: new FakeMessagingProvider(),
   classifier: new FakeClassifier(),
-  storage: new FakeObjectStorage(),
+  storage: createStorage(config),
   publicBaseUrl: config.PUBLIC_BASE_URL,
   pagingFromNumber: config.PAGING_FROM_NUMBER,
 };

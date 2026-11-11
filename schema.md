@@ -115,6 +115,17 @@ Implementation needed the following; each is in the ORM schema and the migration
 | `sessions` | Global (no `account_id`, no RLS); the application role has no grant; read only through `resolve_session` | Sessions also belong to operators, who have no account |
 | Resolver functions and poll views | Owned by the migration (database owner) role in B1; the separate `resolver` role is deferred to deployment | Local build machine; the column lists are checked by IT-10 |
 
+B2 sign-in and storage (2026-11-11, migration `0008_b2_sign_in`):
+
+| Object | Change | Why |
+|---|---|---|
+| `recovery_codes` (new, account-owned, RLS forced) | `user_id uuid not null` (composite FK to `users`), `code_hash bytea not null`, `used_at timestamptz null`; unique `(user_id, code_hash)`. Ten per user, shown once at enrolment, replaced at re-enrolment | TRD 8.1 recovery codes, accepted once (V6.5.1) |
+| `auth_throttle` (new, global, no personal data) | `key_hash bytea` primary key (SHA-256 of scope and normalised email or client address), `window_start`, `hits`, `locked_until`. No grant to the application role; written only by the `auth_throttle_*` functions | Sign-in rate limit and lockout (V6.3.1) |
+| `capability_tokens` | `purpose` adds `invite` (enrolment link, 72 h) and `reset` (password reset, 30 min); check `capability_tokens_user_target`: both need `user_id`. One live link per user and purpose | Invitation and reset links (TRD 8.1); never a sign-in factor |
+| `users` | Invited users get `password_hash = '!unset'` (never a valid Argon2id string) and no TOTP until enrolment; `totp_last_step` is the last accepted step | TRD 8.1 |
+| `sessions` | Written only by `auth_create_session`, `auth_touch_session`, `auth_revoke_session`, `auth_revoke_user_sessions` (section 4); still no table grant | V7.2.1, V7.4.1, V7.4.2 |
+| `attachments` | `storage_key` set only from the key builder (`acct/{account_id}/inbound/{yyyy}/{mm}/{uuid}`), `content_type` from the bytes, `status = rejected` for oversized or unsupported files | AD-10, R-13, V5.2.1, V5.2.2 |
+
 Fix round 1 (2026-11-11, review fixtriage-b1-round1.md):
 
 | Object | Change | Finding |
@@ -184,6 +195,10 @@ Round-4 fix (2026-11-11, review fixtriage-b1-round4.md), fixed after round-4 ret
 | view `job_health` (B1-001) | `/readyz` | `dead_jobs` (a count) |
 | view `dead_jobs` (fix round 2) | operator routes `/ops/jobs/*` (role `operator`, audited) | `id`, `account_id`, `kind`, `attempts`, `last_error`, `created_at` |
 | view `inbound_health` (B1-011, B1-012) | `/readyz` | `oldest_without_request` (a time), `without_request` (a count) |
+| `auth_create_session`, `auth_touch_session`, `auth_revoke_session` (B2) | Sign-in, every authenticated request, sign-out | Write only: create returns `expires_at`; a session is created only for an enabled user with confirmed TOTP or an enabled operator with a TOTP secret |
+| `auth_revoke_user_sessions(user_id)` (B2) | Disable, reset, re-enrolment, inside `withAccount` | A count; changes nothing for a user of another account than `app.account_id` |
+| `auth_operator_accept_totp(operator_id, step)` (B2) | Operator sign-in | A boolean; stores the accepted TOTP step only if it is newer (V6.5.1) |
+| `auth_throttle_check`, `auth_throttle_hit`, `auth_throttle_clear` (B2) | Sign-in, reset, enrolment | Seconds of lockout left (an integer); keys are SHA-256 hashes, no email or address |
 
   None returns message text, names, phone numbers or addresses. Tables `operators`, `rule_sets`, `probe_runs` are global and hold no tenant data. IT-10 calls every function and view with crafted inputs and checks the column list.
 - Cross-account denial: a foreign-key lookup of another account's ID returns "not found"; composite foreign keys `(account_id, id)` on child tables prevent a row in one account from referencing a parent in another. References to `operators` (`escalation_steps.target_operator_id`, `escalations.operator_engaged_by`, `relayed_by_operator_id`, `sessions.operator_id`) are plain foreign keys because operators belong to no account.

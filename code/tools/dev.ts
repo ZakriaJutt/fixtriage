@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { appUrl, ownerUrl } from '@fixtriage/db';
 import { migrate } from '@fixtriage/db/migrate';
 import { seedRuleSets } from '@fixtriage/services';
+import { loadLocalEnvFile } from '@fixtriage/platform';
 
 const CODE = fileURLToPath(new URL('..', import.meta.url));
 const WEB_PORT = 8109;
@@ -18,6 +19,9 @@ function fail(part: string, why: string): never {
   for (const c of children) c.kill('SIGTERM');
   process.exit(1);
 }
+
+// Local settings (SMTP to Mailpit, S3 to MinIO, the local TOTP key) come from the gitignored code/.env; see .env.example.
+if (!loadLocalEnvFile(`${CODE}.env`)) fail('settings', 'code/.env is missing: copy .env.example to .env and fill the local values');
 
 const env = {
   ...process.env,

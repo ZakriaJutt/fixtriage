@@ -41,7 +41,7 @@ describe('IT-16 liveness from outside the application', () => {
     const port = await mon.listen();
     child = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/src/main.ts'], {
       cwd: CODE,
-      env: { ...process.env, NODE_ENV: 'test', DATABASE_URL: appUrl('test'), PUBLIC_BASE_URL: 'http://localhost:8109', TWILIO_AUTH_TOKEN: 'x'.repeat(32), POSTMARK_INBOUND_SECRET: 'y'.repeat(32), PAGING_FROM_NUMBER: '+16045550199', MONITOR_URL: `http://127.0.0.1:${port}`, CHECKIN_INTERVAL_MS: '200', WORKER_POLL_MS: '200' },
+      env: { ...process.env, NODE_ENV: 'test', DATABASE_URL: appUrl('test'), PUBLIC_BASE_URL: 'http://localhost:8109', TWILIO_AUTH_TOKEN: 'x'.repeat(32), POSTMARK_INBOUND_SECRET: 'y'.repeat(32), PAGING_FROM_NUMBER: '+16045550199', TOTP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'), STORAGE: 'fake', MAIL_TRANSPORT: 'fake', MONITOR_URL: `http://127.0.0.1:${port}`, CHECKIN_INTERVAL_MS: '200', WORKER_POLL_MS: '200' },
       stdio: 'ignore',
     });
     await waitFor(() => mon.checkIns.length >= 2, 20_000);
